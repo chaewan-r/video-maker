@@ -1,0 +1,1162 @@
+<script>
+    // 전역 변수
+    const MAX_IMAGES = 50;
+    let images = new Array(MAX_IMAGES).fill(null);
+    let subtitles = new Array(MAX_IMAGES).fill('');
+    let currentImageIndex = 0;
+    let previewInterval = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let isRecording = false;
+    let customMusicFile = null;
+    let bgmAudio = null;
+
+    // 초기화
+    document.addEventListener('DOMContentLoaded', () => {
+        initializeUploadSlots();
+        updateCanvasSize();
+        updateOpacityDisplay();
+        updateVolumeDisplay();
+        updatePositionDisplay();
+        updateFontSizeDisplay();
+        drawCurrentImage();
+    });
+
+    // 드래그앤드롭 관련 변수
+    let draggedSlotIndex = null;
+
+    // 슬롯 HTML 생성 (재사용)
+    function createSlotHTML(index) {
+        return `
+            <input type="file" accept="image/*" onchange="handleImageUpload(${index}, this)">
+            <div class="slot-number">${index + 1}</div>
+            <div style="font-size: 24px; color: #999;">+</div>
+        `;
+    }
+
+    // 업로드 슬롯 초기화
+    function initializeUploadSlots() {
+        const uploadGrid = document.getElementById('uploadGrid');
+        uploadGrid.innerHTML = '';
+        for (let i = 0; i < MAX_IMAGES; i++) {
+            const slot = document.createElement('div');
+            slot.className = 'upload-slot';
+            slot.dataset.index = i;
+            slot.innerHTML = createSlotHTML(i);
+            
+            // 모든 슬롯에 드롭 이벤트 추가 (빈 슬롯도 드롭 가능)
+            slot.addEventListener('dragover', handleDragOver);
+            slot.addEventListener('drop', handleDrop);
+            slot.addEventListener('dragenter', handleDragEnter);
+            slot.addEventListener('dragleave', handleDragLeave);
+            
+            // 이미지가 있는 슬롯만 드래그 가능
+            if (images[i] !== null) {
+                slot.draggable = true;
+                slot.addEventListener('dragstart', handleDragStart);
+                slot.addEventListener('dragend', handleDragEnd);
+            }
+            
+            uploadGrid.appendChild(slot);
+        }
+    }
+
+    // 드래그 시작
+    function handleDragStart(e) {
+        draggedSlotIndex = parseInt(this.dataset.index);
+        this.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+    }
+
+    function handleDragOver(e) {
+        if (e.preventDefault) e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        return false;
+    }
+
+    function handleDragEnter(e) {
+        if (this !== e.target && this.classList.contains('upload-slot')) {
+            this.classList.add('drag-over');
+        }
+    }
+
+    function handleDragLeave(e) {
+        if (this !== e.target && this.classList.contains('upload-slot')) {
+            this.classList.remove('drag-over');
+        }
+    }
+
+    function handleDrop(e) {
+        if (e.stopPropagation) e.stopPropagation();
+        this.classList.remove('drag-over');
+        
+        const targetSlotIndex = parseInt(this.dataset.index);
+        if (draggedSlotIndex === null || draggedSlotIndex === targetSlotIndex) {
+            return false;
+        }
+        
+        // 드래그한 이미지와 자막 임시 저장
+        const draggedImage = images[draggedSlotIndex];
+        const draggedSubtitle = subtitles[draggedSlotIndex];
+        
+        if (!draggedImage) return false; // 이미지가 없으면 무시
+        
+        // 삽입 방식으로 순서 변경
+        if (draggedSlotIndex < targetSlotIndex) {
+            // 앞에서 뒤로 이동: 사이 항목들을 한 칸씩 앞으로 이동
+            for (let i = draggedSlotIndex; i < targetSlotIndex; i++) {
+                images[i] = images[i + 1];
+                subtitles[i] = subtitles[i + 1];
+            }
+            images[targetSlotIndex] = draggedImage;
+            subtitles[targetSlotIndex] = draggedSubtitle;
+        } else {
+            // 뒤에서 앞으로 이동: 사이 항목들을 한 칸씩 뒤로 이동
+            for (let i = draggedSlotIndex; i > targetSlotIndex; i--) {
+                images[i] = images[i - 1];
+                subtitles[i] = subtitles[i - 1];
+            }
+            images[targetSlotIndex] = draggedImage;
+            subtitles[targetSlotIndex] = draggedSubtitle;
+        }
+        
+        // UI 업데이트 (변경된 범위만)
+        const startIndex = Math.min(draggedSlotIndex, targetSlotIndex);
+        const endIndex = Math.max(draggedSlotIndex, targetSlotIndex);
+        const uploadGrid = document.getElementById('uploadGrid');
+        
+        for (let i = startIndex; i <= endIndex; i++) {
+            const slot = uploadGrid.children[i];
+            updateSlotDisplay(slot, i);
+        }
+        
+        // 현재 이미지 인덱스 업데이트
+        const validImages = images.filter(img => img !== null);
+        if (validImages.length > 0 && currentImageIndex < validImages.length) {
+            const oldCurrentImage = validImages[currentImageIndex];
+            if (oldCurrentImage) {
+                const newValidIndex = validImages.indexOf(oldCurrentImage);
+                if (newValidIndex !== -1) {
+                    currentImageIndex = newValidIndex;
+                }
+            }
+        }
+        
+        generateSubtitleInputs();
+        drawCurrentImage();
+        updateStatus('✅ 이미지 순서가 변경되었습니다!');
+        return false;
+    }
+
+    function handleDragEnd(e) {
+        this.classList.remove('dragging');
+        document.querySelectorAll('.upload-slot').forEach(slot => {
+            slot.classList.remove('drag-over');
+        });
+        draggedSlotIndex = null;
+    }
+
+    // 슬롯 표시 업데이트
+    function updateSlotDisplay(slot, index) {
+        slot.dataset.index = index;
+        
+        if (images[index] !== null) {
+            slot.classList.add('has-image');
+            slot.innerHTML = `
+                <input type="file" accept="image/*" onchange="handleImageUpload(${index}, this)">
+                <img src="${images[index].src}" alt="이미지 ${index + 1}">
+                <div class="slot-number">${index + 1}</div>
+                <button class="remove-btn" onclick="removeImage(${index})">×</button>
+            `;
+            slot.draggable = true;
+            // 드래그 이벤트만 추가 (드롭 이벤트는 이미 있음)
+            if (!slot.hasAttribute('data-drag-listener')) {
+                slot.addEventListener('dragstart', handleDragStart);
+                slot.addEventListener('dragend', handleDragEnd);
+                slot.setAttribute('data-drag-listener', 'true');
+            }
+        } else {
+            slot.classList.remove('has-image');
+            slot.innerHTML = createSlotHTML(index);
+            slot.draggable = false;
+            slot.removeAttribute('data-drag-listener');
+        }
+    }
+
+    // 캔버스 초기화 (재사용)
+    function resetCanvas() {
+        const canvas = document.getElementById('videoCanvas');
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#f8f9fa';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#999';
+        ctx.font = '24px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('이미지를 업로드해주세요', canvas.width/2, canvas.height/2);
+    }
+
+    // 이미지만 지우기
+    function clearAllImages() {
+        for (let i = 0; i < MAX_IMAGES; i++) {
+            images[i] = null;
+        }
+        initializeUploadSlots();
+        resetCanvas();
+        stopPreview();
+        currentImageIndex = 0;
+        document.getElementById('subtitleInputs').innerHTML = '<p style="text-align: center; color: #666; font-style: italic;">이미지를 업로드하면 각 이미지별 자막을 설정할 수 있습니다. (기존 자막은 유지됩니다)</p>';
+        updateStatus('모든 이미지가 삭제되었습니다! (자막은 유지됨)');
+    }
+
+    // 공통 자막 적용
+    function applyCommonSubtitle() {
+        const commonText = document.getElementById('commonSubtitle').value.trim();
+        if (!commonText) {
+            updateStatus('공통 자막 내용을 입력해주세요.');
+            return;
+        }
+        
+        const validImages = images.filter(img => img !== null);
+        if (validImages.length === 0) {
+            updateStatus('먼저 이미지를 업로드해주세요.');
+            return;
+        }
+        
+        for (let i = 0; i < MAX_IMAGES; i++) {
+            if (images[i] !== null) {
+                subtitles[i] = commonText;
+            }
+        }
+        
+        generateSubtitleInputs();
+        drawCurrentImage();
+        updateStatus(validImages.length + '개 이미지에 공통 자막이 적용되었습니다.');
+    }
+
+    function clearCommonSubtitle() {
+        document.getElementById('commonSubtitle').value = '';
+    }
+
+    function clearAllSubtitles() {
+        for (let i = 0; i < MAX_IMAGES; i++) {
+            subtitles[i] = '';
+        }
+        generateSubtitleInputs();
+        drawCurrentImage();
+        updateStatus('모든 자막이 삭제되었습니다!');
+    }
+
+    // 이미지와 자막 모두 지우기
+    function forceDeleteAllImages() {
+        for (let i = 0; i < MAX_IMAGES; i++) {
+            images[i] = null;
+            subtitles[i] = '';
+        }
+        initializeUploadSlots();
+        document.getElementById('subtitleInputs').innerHTML = '<p style="text-align: center; color: #666; font-style: italic;">이미지를 업로드하면 각 이미지별 자막을 설정할 수 있습니다.</p>';
+        resetCanvas();
+        stopPreview();
+        currentImageIndex = 0;
+        updateStatus('모든 이미지와 자막이 삭제되었습니다!');
+    }
+
+    function updateFontSizeDisplay() {
+        document.getElementById('fontSizeValue').textContent = document.getElementById('subtitleFontSize').value + 'px';
+    }
+
+    // 일괄 업로드 처리
+    function processBulkUpload() {
+        const bulkInput = document.getElementById('bulkUpload');
+        const files = Array.from(bulkInput.files);
+        if (files.length === 0) return;
+
+        const emptySlots = [];
+        for (let i = 0; i < MAX_IMAGES; i++) {
+            if (images[i] === null) emptySlots.push(i);
+        }
+
+        if (emptySlots.length === 0) {
+            updateStatus('모든 슬롯이 가득 찼습니다!');
+            bulkInput.value = '';
+            return;
+        }
+
+        const uploadCount = Math.min(files.length, emptySlots.length);
+        let completedUploads = 0;
+
+        files.slice(0, uploadCount).forEach((file, fileIndex) => {
+            const slotIndex = emptySlots[fileIndex];
+            const reader = new FileReader();
+            
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    images[slotIndex] = img;
+                    const slot = document.querySelectorAll('.upload-slot')[slotIndex];
+                    slot.dataset.index = slotIndex;
+                    slot.classList.add('has-image');
+                    slot.innerHTML = `
+                        <input type="file" accept="image/*" onchange="handleImageUpload(${slotIndex}, this)">
+                        <img src="${event.target.result}" alt="이미지 ${slotIndex + 1}">
+                        <div class="slot-number">${slotIndex + 1}</div>
+                        <button class="remove-btn" onclick="removeImage(${slotIndex})">×</button>
+                    `;
+                    // 드래그 가능하게 설정
+                    slot.draggable = true;
+                    slot.addEventListener('dragstart', handleDragStart);
+                    slot.addEventListener('dragover', handleDragOver);
+                    slot.addEventListener('drop', handleDrop);
+                    slot.addEventListener('dragend', handleDragEnd);
+                    slot.addEventListener('dragenter', handleDragEnter);
+                    slot.addEventListener('dragleave', handleDragLeave);
+                    
+                    completedUploads++;
+                    if (completedUploads === uploadCount) {
+                        generateSubtitleInputs();
+                        updateStatus();
+                        bulkInput.value = '';
+                        drawCurrentImage();
+                    }
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        if (files.length > emptySlots.length) {
+            updateStatus(emptySlots.length + '개 슬롯만 사용 가능하여 ' + uploadCount + '개 이미지만 업로드됩니다.');
+        }
+    }
+
+    // 이미지 업로드 처리
+    function handleImageUpload(index, input) {
+        const file = input.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const img = new Image();
+            img.onload = () => {
+                images[index] = img;
+                const slot = input.parentElement;
+                slot.dataset.index = index;
+                slot.classList.add('has-image');
+                slot.innerHTML = `
+                    <input type="file" accept="image/*" onchange="handleImageUpload(${index}, this)">
+                    <img src="${event.target.result}" alt="이미지 ${index + 1}">
+                    <div class="slot-number">${index + 1}</div>
+                    <button class="remove-btn" onclick="removeImage(${index})">×</button>
+                `;
+                // 드래그 가능하게 설정
+                slot.draggable = true;
+                slot.addEventListener('dragstart', handleDragStart);
+                slot.addEventListener('dragover', handleDragOver);
+                slot.addEventListener('drop', handleDrop);
+                slot.addEventListener('dragend', handleDragEnd);
+                slot.addEventListener('dragenter', handleDragEnter);
+                slot.addEventListener('dragleave', handleDragLeave);
+                
+                generateSubtitleInputs();
+                updateStatus();
+                drawCurrentImage();
+            };
+            img.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    // 이미지 제거
+    function removeImage(index) {
+        images[index] = null;
+        subtitles[index] = '';
+        const slot = document.querySelectorAll('.upload-slot')[index];
+        slot.classList.remove('has-image');
+        slot.innerHTML = createSlotHTML(index);
+        slot.draggable = false;
+        // 이벤트 리스너 제거
+        slot.removeEventListener('dragstart', handleDragStart);
+        slot.removeEventListener('dragover', handleDragOver);
+        slot.removeEventListener('drop', handleDrop);
+        slot.removeEventListener('dragend', handleDragEnd);
+        slot.removeEventListener('dragenter', handleDragEnter);
+        slot.removeEventListener('dragleave', handleDragLeave);
+        generateSubtitleInputs();
+        updateStatus();
+        drawCurrentImage();
+    }
+
+    // 자막 입력 필드 생성
+    function generateSubtitleInputs() {
+        const container = document.getElementById('subtitleInputs');
+        const validImageIndices = images.map((img, index) => img !== null ? index : -1).filter(index => index !== -1);
+        
+        if (validImageIndices.length === 0) {
+            container.innerHTML = '<p style="text-align: center; color: #666; font-style: italic;">이미지를 업로드하면 각 이미지별 자막을 설정할 수 있습니다.</p>';
+            return;
+        }
+        
+        container.innerHTML = validImageIndices.map(index => `
+            <div style="background: #fff; padding: 20px; border-radius: 10px; border: 1px solid #ddd;">
+                <label style="display: block; margin-bottom: 10px; font-weight: bold; color: #333;">
+                    이미지 ${index + 1}번 자막:
+                </label>
+                <textarea 
+                    placeholder="이 이미지에 표시할 자막을 입력하세요..."
+                    style="width: 100%; padding: 10px; border: 2px solid #e9ecef; border-radius: 8px; font-size: 14px; resize: vertical; min-height: 80px;"
+                    oninput="updateSubtitle(${index}, this.value)"
+                >${subtitles[index] || ''}</textarea>
+            </div>
+        `).join('');
+    }
+
+    function updateSubtitle(index, value) {
+        subtitles[index] = value;
+        previewSubtitle();
+    }
+
+    function previewSubtitle() {
+        document.getElementById('customPositionGroup').style.display = 
+            document.getElementById('subtitlePosition').value === 'custom' ? 'block' : 'none';
+        drawCurrentImage();
+    }
+
+    function updateOpacityDisplay() {
+        document.getElementById('opacityValue').textContent = 
+            Math.round(document.getElementById('subtitleOpacity').value * 100) + '%';
+    }
+
+    function updatePositionDisplay() {
+        document.getElementById('positionValue').textContent = 
+            document.getElementById('subtitleVerticalPosition').value + '%';
+    }
+
+    function updateVolumeDisplay() {
+        document.getElementById('volumeValue').textContent =
+            Math.round(document.getElementById('bgmVolume').value * 100) + '%';
+    }
+
+    function updateBGMRangeDisplay() {
+        const startTime = parseFloat(document.getElementById('bgmStartTime').value);
+        const endTime = parseFloat(document.getElementById('bgmEndTime').value);
+
+        document.getElementById('bgmStartDisplay').textContent = startTime.toFixed(1);
+        document.getElementById('bgmEndDisplay').textContent = endTime.toFixed(1);
+
+        if (endTime > startTime) {
+            document.getElementById('bgmDurationDisplay').textContent = (endTime - startTime).toFixed(1);
+        } else {
+            document.getElementById('bgmDurationDisplay').textContent = '전체';
+        }
+    }
+
+    function handleBGMTypeChange() {
+        const customSection = document.getElementById('customMusicSection');
+        const timingSection = document.getElementById('bgmTimingSection');
+        const isCustom = document.getElementById('bgmType').value === 'custom';
+        customSection.style.display = isCustom ? 'block' : 'none';
+        timingSection.style.display = isCustom ? 'block' : 'none';
+
+        if (!isCustom) {
+            stopBGM();
+            customMusicFile = null;
+            document.getElementById('musicInfo').style.display = 'none';
+        }
+    }
+
+    function handleMusicUpload(input) {
+        const file = input.files[0];
+        if (!file) return;
+
+        if (!file.name.toLowerCase().endsWith('.mp3')) {
+            updateStatus('MP3 파일만 지원됩니다!');
+            input.value = '';
+            return;
+        }
+
+        if (file.size > 10 * 1024 * 1024) {
+            updateStatus('파일 크기가 너무 큽니다. 10MB 이하의 파일을 선택해주세요.');
+            input.value = '';
+            return;
+        }
+
+        customMusicFile = file;
+        document.getElementById('musicName').textContent = '🎵 ' + file.name;
+        document.getElementById('musicSize').textContent = '📁 크기: ' + (file.size / 1024 / 1024).toFixed(1) + 'MB';
+        document.getElementById('musicInfo').style.display = 'block';
+        updateStatus('MP3 파일 업로드 완료: ' + file.name);
+    }
+
+    function previewBGM() {
+        const bgmType = document.getElementById('bgmType').value;
+        const volume = parseFloat(document.getElementById('bgmVolume').value);
+        
+        if (bgmType === 'none') {
+            updateStatus('BGM을 선택해주세요!');
+            return;
+        }
+
+        stopBGM();
+
+        if (bgmType === 'custom') {
+            if (!customMusicFile) {
+                updateStatus('먼저 MP3 파일을 업로드해주세요!');
+                return;
+            }
+
+            try {
+                const startTime = parseFloat(document.getElementById('bgmStartTime').value) || 0;
+                const endTime = parseFloat(document.getElementById('bgmEndTime').value) || 0;
+
+                bgmAudio = new Audio();
+                bgmAudio.src = URL.createObjectURL(customMusicFile);
+                bgmAudio.volume = volume;
+                bgmAudio.loop = false;
+                bgmAudio.currentTime = startTime;
+
+                bgmAudio.addEventListener('loadeddata', () => {
+                    const duration = endTime > startTime ? endTime - startTime : 10;
+                    updateStatus('커스텀 MP3 미리듣기 중... (' + Math.min(duration, 10).toFixed(1) + '초)');
+                    bgmAudio.play();
+
+                    // 종료 시점 체크
+                    if (endTime > startTime) {
+                        const checkInterval = setInterval(() => {
+                            if (bgmAudio && bgmAudio.currentTime >= endTime) {
+                                clearInterval(checkInterval);
+                                stopBGM();
+                                updateStatus();
+                            }
+                        }, 100);
+                        bgmAudio.dataset.checkInterval = checkInterval;
+                    }
+
+                    setTimeout(() => { stopBGM(); updateStatus(); }, Math.min(duration, 10) * 1000);
+                });
+
+                bgmAudio.addEventListener('error', () => {
+                    updateStatus('MP3 파일을 재생할 수 없습니다.');
+                    stopBGM();
+                });
+            } catch (error) {
+                updateStatus('커스텀 음악 재생 중 오류가 발생했습니다.');
+            }
+        } else {
+            try {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const masterGain = audioContext.createGain();
+                masterGain.gain.value = volume * 0.15;
+                masterGain.connect(audioContext.destination);
+
+                const oscillators = [];
+
+                if (bgmType === 'peaceful') {
+                    // 차분한 음악: C major 코드 (C, E, G)
+                    [261.63, 329.63, 392.00].forEach((freq, i) => {
+                        const osc = audioContext.createOscillator();
+                        const gain = audioContext.createGain();
+                        osc.type = 'sine';
+                        osc.frequency.value = freq;
+                        gain.gain.value = 0.3 - (i * 0.05);
+                        osc.connect(gain);
+                        gain.connect(masterGain);
+                        osc.start();
+                        oscillators.push(osc);
+                    });
+                } else if (bgmType === 'upbeat') {
+                    // 활기찬 음악: G major 코드 + 리듬
+                    [392.00, 493.88, 587.33].forEach((freq, i) => {
+                        const osc = audioContext.createOscillator();
+                        const gain = audioContext.createGain();
+                        osc.type = 'triangle';
+                        osc.frequency.value = freq;
+                        gain.gain.value = 0.25;
+
+                        // 리듬감 추가
+                        gain.gain.setValueAtTime(0.25, audioContext.currentTime);
+                        for (let t = 0; t < 5; t += 0.5) {
+                            gain.gain.setValueAtTime(0.35, audioContext.currentTime + t);
+                            gain.gain.setValueAtTime(0.15, audioContext.currentTime + t + 0.25);
+                        }
+
+                        osc.connect(gain);
+                        gain.connect(masterGain);
+                        osc.start();
+                        oscillators.push(osc);
+                    });
+                } else if (bgmType === 'cinematic') {
+                    // 영화같은 음악: Am 코드 (A, C, E) - 낮은 음역
+                    [110.00, 130.81, 164.81, 220.00].forEach((freq, i) => {
+                        const osc = audioContext.createOscillator();
+                        const gain = audioContext.createGain();
+                        osc.type = 'sawtooth';
+                        osc.frequency.value = freq;
+                        gain.gain.value = 0.2 - (i * 0.03);
+
+                        // 점진적 볼륨 증가 (영화 같은 효과)
+                        gain.gain.setValueAtTime(0, audioContext.currentTime);
+                        gain.gain.linearRampToValueAtTime(gain.gain.value, audioContext.currentTime + 1);
+
+                        osc.connect(gain);
+                        gain.connect(masterGain);
+                        osc.start();
+                        oscillators.push(osc);
+                    });
+                }
+
+                bgmAudio = { oscillators, audioContext };
+
+                const bgmNames = { 'peaceful': '차분한', 'upbeat': '활기찬', 'cinematic': '영화같은' };
+                updateStatus(bgmNames[bgmType] + ' BGM 미리듣기 중... (10초 후 자동 정지)');
+                setTimeout(() => { stopBGM(); updateStatus(); }, 10000);
+            } catch (error) {
+                updateStatus('BGM 재생 중 오류가 발생했습니다.');
+            }
+        }
+    }
+
+    function stopBGMPreview() {
+        stopBGM();
+        updateStatus();
+    }
+
+    function stopBGM() {
+        if (bgmAudio) {
+            try {
+                if (bgmAudio.pause) {
+                    // 커스텀 MP3 파일 정지
+                    bgmAudio.pause();
+                    bgmAudio.currentTime = 0;
+                    if (bgmAudio.src && bgmAudio.src.startsWith('blob:')) {
+                        URL.revokeObjectURL(bgmAudio.src);
+                    }
+                } else if (bgmAudio.oscillators) {
+                    // 여러 오실레이터 정지
+                    bgmAudio.oscillators.forEach(osc => {
+                        try { osc.stop(); } catch (e) {}
+                    });
+                    bgmAudio.audioContext.close();
+                } else if (bgmAudio.oscillator) {
+                    // 단일 오실레이터 정지 (하위 호환성)
+                    bgmAudio.oscillator.stop();
+                    bgmAudio.audioContext.close();
+                }
+            } catch (e) {}
+            bgmAudio = null;
+        }
+    }
+
+    function updateCanvasSize() {
+        const [width, height] = document.getElementById('videoSize').value.split(',').map(Number);
+        const canvas = document.getElementById('videoCanvas');
+        canvas.width = width;
+        canvas.height = height;
+        
+        const maxDisplayWidth = 500;
+        const maxDisplayHeight = 400;
+        const aspectRatio = width / height;
+        
+        if (width > height) {
+            canvas.style.width = maxDisplayWidth + 'px';
+            canvas.style.height = (maxDisplayWidth / aspectRatio) + 'px';
+        } else {
+            canvas.style.height = maxDisplayHeight + 'px';
+            canvas.style.width = (maxDisplayHeight * aspectRatio) + 'px';
+        }
+        
+        const ratios = { '1920,1080': '16:9', '1080,1920': '9:16', '1080,1350': '4:5', '1080,1080': '1:1' };
+        document.getElementById('ratioIndicator').textContent = ratios[width + ',' + height] || '';
+        
+        drawCurrentImage();
+    }
+
+    function drawCurrentImage() {
+        const canvas = document.getElementById('videoCanvas');
+        const ctx = canvas.getContext('2d');
+        const validImages = images.filter(img => img !== null);
+        
+        ctx.fillStyle = document.getElementById('backgroundColor').value;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        if (validImages.length === 0) {
+            ctx.fillStyle = '#999';
+            ctx.font = '24px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('이미지를 업로드해주세요', canvas.width/2, canvas.height/2);
+            return;
+        }
+        
+        const img = validImages[currentImageIndex % validImages.length];
+        if (!img) return;
+        
+        const canvasAspect = canvas.width / canvas.height;
+        const imgAspect = img.width / img.height;
+        const imageScaling = document.getElementById('imageScaling').value;
+        let drawWidth, drawHeight, drawX, drawY;
+        
+        if (imageScaling === 'contain') {
+            if (imgAspect > canvasAspect) {
+                drawWidth = canvas.width;
+                drawHeight = drawWidth / imgAspect;
+                drawX = 0;
+                drawY = (canvas.height - drawHeight) / 2;
+            } else {
+                drawHeight = canvas.height;
+                drawWidth = drawHeight * imgAspect;
+                drawX = (canvas.width - drawWidth) / 2;
+                drawY = 0;
+            }
+        } else {
+            if (imgAspect > canvasAspect) {
+                drawHeight = canvas.height;
+                drawWidth = drawHeight * imgAspect;
+                drawX = (canvas.width - drawWidth) / 2;
+                drawY = 0;
+            } else {
+                drawWidth = canvas.width;
+                drawHeight = drawWidth / imgAspect;
+                drawX = 0;
+                drawY = (canvas.height - drawHeight) / 2;
+            }
+        }
+        
+        ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+        drawSubtitle(ctx, currentImageIndex, canvas.width, canvas.height);
+    }
+
+    function drawSubtitle(ctx, imageIndex, canvasWidth, canvasHeight) {
+        const validImageIndices = images.map((img, index) => img !== null ? index : -1).filter(index => index !== -1);
+        if (validImageIndices.length === 0) return;
+        
+        const actualImageIndex = validImageIndices[imageIndex % validImageIndices.length];
+        const text = subtitles[actualImageIndex];
+        if (!text || text.trim() === '') return;
+        
+        const fontSize = parseInt(document.getElementById('subtitleFontSize').value);
+        const fontColor = document.getElementById('subtitleColor').value;
+        const subtitlePositionType = document.getElementById('subtitlePosition').value;
+        const hasBackground = document.getElementById('subtitleBackground').value === 'true';
+        const bgColor = document.getElementById('subtitleBgColor').value;
+        const opacity = parseFloat(document.getElementById('subtitleOpacity').value);
+        
+        ctx.font = 'bold ' + fontSize + 'px -apple-system, BlinkMacSystemFont, "Malgun Gothic", "맑은 고딕", "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        const maxWidth = canvasWidth * 0.9;
+        const words = text.split(' ');
+        const lines = [];
+        let currentLine = words[0] || '';
+        
+        for (let i = 1; i < words.length; i++) {
+            const word = words[i];
+            const width = ctx.measureText(currentLine + " " + word).width;
+            if (width < maxWidth) {
+                currentLine += " " + word;
+            } else {
+                lines.push(currentLine);
+                currentLine = word;
+            }
+        }
+        if (currentLine) lines.push(currentLine);
+        
+        const lineHeight = fontSize * 1.2;
+        const totalHeight = lines.length * lineHeight;
+        
+        let startY;
+        if (subtitlePositionType === 'custom') {
+            const customPosition = parseFloat(document.getElementById('subtitleVerticalPosition').value);
+            startY = (canvasHeight * customPosition / 100) + (lineHeight / 2);
+        } else {
+            const positions = {
+                'top': totalHeight / 2 + 50,
+                'center': canvasHeight / 2 - (totalHeight / 2) + lineHeight / 2,
+                'bottom': canvasHeight - totalHeight / 2 - 50
+            };
+            startY = positions[subtitlePositionType] || positions['bottom'];
+        }
+        
+        lines.forEach((line, index) => {
+            const x = canvasWidth / 2;
+            const y = startY + (index * lineHeight);
+            
+            if (hasBackground) {
+                const textWidth = ctx.measureText(line).width;
+                const padding = 20;
+                ctx.fillStyle = bgColor + Math.round(opacity * 255).toString(16).padStart(2, '0');
+                ctx.fillRect(x - textWidth / 2 - padding, y - fontSize / 2 - padding / 2, textWidth + padding * 2, fontSize + padding);
+            }
+            
+            ctx.fillStyle = fontColor;
+            ctx.fillText(line, x, y);
+        });
+    }
+
+    function startPreview() {
+        const validImages = images.filter(img => img !== null);
+        if (validImages.length === 0) {
+            updateStatus('먼저 이미지를 업로드해주세요!');
+            return;
+        }
+
+        stopPreview();
+        const duration = parseFloat(document.getElementById('imageDuration').value) * 1000;
+        currentImageIndex = 0;
+
+        drawCurrentImage();
+        updateProgressBar(0, validImages.length);
+
+        previewInterval = setInterval(() => {
+            currentImageIndex = (currentImageIndex + 1) % validImages.length;
+            drawCurrentImage();
+            updateProgressBar(currentImageIndex, validImages.length);
+        }, duration);
+
+        // BGM 미리보기 재생
+        startPreviewBGM();
+
+        updateStatus('미리보기 재생 중... (BGM 포함)');
+    }
+
+    function startPreviewBGM() {
+        const bgmType = document.getElementById('bgmType').value;
+        const volume = parseFloat(document.getElementById('bgmVolume').value);
+
+        if (bgmType === 'none') return;
+
+        stopBGM();
+
+        if (bgmType === 'custom' && customMusicFile) {
+            try {
+                const startTime = parseFloat(document.getElementById('bgmStartTime').value) || 0;
+                const endTime = parseFloat(document.getElementById('bgmEndTime').value) || 0;
+
+                bgmAudio = new Audio();
+                bgmAudio.src = URL.createObjectURL(customMusicFile);
+                bgmAudio.volume = volume;
+                bgmAudio.loop = true;
+                bgmAudio.currentTime = startTime;
+
+                bgmAudio.addEventListener('loadeddata', () => {
+                    bgmAudio.play();
+
+                    // 종료 시점 체크 (루프)
+                    if (endTime > startTime) {
+                        const checkInterval = setInterval(() => {
+                            if (bgmAudio && bgmAudio.currentTime >= endTime) {
+                                bgmAudio.currentTime = startTime;
+                            }
+                        }, 100);
+                        bgmAudio.dataset.checkInterval = checkInterval;
+                    }
+                });
+            } catch (error) {
+                console.warn('BGM 미리보기 실패:', error);
+            }
+        } else if (bgmType !== 'custom' && bgmType !== 'none') {
+            try {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const masterGain = audioContext.createGain();
+                masterGain.gain.value = volume * 0.15;
+                masterGain.connect(audioContext.destination);
+
+                const oscillators = [];
+
+                if (bgmType === 'peaceful') {
+                    [261.63, 329.63, 392.00].forEach((freq, i) => {
+                        const osc = audioContext.createOscillator();
+                        const gain = audioContext.createGain();
+                        osc.type = 'sine';
+                        osc.frequency.value = freq;
+                        gain.gain.value = 0.3 - (i * 0.05);
+                        osc.connect(gain);
+                        gain.connect(masterGain);
+                        osc.start();
+                        oscillators.push(osc);
+                    });
+                } else if (bgmType === 'upbeat') {
+                    [392.00, 493.88, 587.33].forEach((freq, i) => {
+                        const osc = audioContext.createOscillator();
+                        const gain = audioContext.createGain();
+                        osc.type = 'triangle';
+                        osc.frequency.value = freq;
+                        gain.gain.value = 0.25;
+
+                        gain.gain.setValueAtTime(0.25, audioContext.currentTime);
+                        for (let t = 0; t < 60; t += 0.5) {
+                            gain.gain.setValueAtTime(0.35, audioContext.currentTime + t);
+                            gain.gain.setValueAtTime(0.15, audioContext.currentTime + t + 0.25);
+                        }
+
+                        osc.connect(gain);
+                        gain.connect(masterGain);
+                        osc.start();
+                        oscillators.push(osc);
+                    });
+                } else if (bgmType === 'cinematic') {
+                    [110.00, 130.81, 164.81, 220.00].forEach((freq, i) => {
+                        const osc = audioContext.createOscillator();
+                        const gain = audioContext.createGain();
+                        osc.type = 'sawtooth';
+                        osc.frequency.value = freq;
+                        gain.gain.value = 0.2 - (i * 0.03);
+
+                        gain.gain.setValueAtTime(0, audioContext.currentTime);
+                        gain.gain.linearRampToValueAtTime(gain.gain.value, audioContext.currentTime + 1);
+
+                        osc.connect(gain);
+                        gain.connect(masterGain);
+                        osc.start();
+                        oscillators.push(osc);
+                    });
+                }
+
+                bgmAudio = { oscillators, audioContext };
+            } catch (error) {
+                console.warn('BGM 미리보기 실패:', error);
+            }
+        }
+    }
+
+    function stopPreview() {
+        if (previewInterval) {
+            clearInterval(previewInterval);
+            previewInterval = null;
+        }
+        stopBGM();
+        updateProgressBar(0, 1);
+        updateStatus();
+    }
+
+    function updateProgressBar(current, total) {
+        document.getElementById('progressFill').style.width = (total > 0 ? (current / total) * 100 : 0) + '%';
+    }
+
+    async function startRecording() {
+        const validImages = images.filter(img => img !== null);
+        if (validImages.length === 0) {
+            updateStatus('먼저 이미지를 업로드해주세요!');
+            return;
+        }
+
+        try {
+            stopPreview();
+            stopBGM();
+            recordedChunks = [];
+            
+            const canvas = document.getElementById('videoCanvas');
+            const stream = canvas.captureStream(30);
+            const bgmType = document.getElementById('bgmType').value;
+            const volume = parseFloat(document.getElementById('bgmVolume').value);
+            let combinedStream = stream;
+            
+            if (bgmType !== 'none') {
+                try {
+                    if (bgmType === 'custom' && customMusicFile) {
+                        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        const arrayBuffer = await customMusicFile.arrayBuffer();
+                        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+                        const startTime = parseFloat(document.getElementById('bgmStartTime').value) || 0;
+                        const endTime = parseFloat(document.getElementById('bgmEndTime').value) || 0;
+
+                        const source = audioContext.createBufferSource();
+                        source.buffer = audioBuffer;
+                        source.loop = true;
+
+                        // 구간 설정이 있으면 적용
+                        if (endTime > startTime) {
+                            source.loopStart = startTime;
+                            source.loopEnd = endTime;
+                        }
+
+                        const gainNode = audioContext.createGain();
+                        gainNode.gain.value = volume * 0.7;
+                        const dest = audioContext.createMediaStreamDestination();
+                        source.connect(gainNode);
+                        gainNode.connect(dest);
+                        source.start(0, startTime);
+
+                        const audioTracks = dest.stream.getAudioTracks();
+                        const videoTracks = stream.getVideoTracks();
+                        if (audioTracks.length > 0) {
+                            combinedStream = new MediaStream([...videoTracks, ...audioTracks]);
+                            const rangeInfo = endTime > startTime ? ' (' + startTime.toFixed(1) + 's ~ ' + endTime.toFixed(1) + 's)' : '';
+                            updateStatus('BGM이 포함된 영상을 제작합니다.' + rangeInfo);
+                        }
+                    } else if (bgmType !== 'custom') {
+                        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        const masterGain = audioContext.createGain();
+                        masterGain.gain.value = volume * 0.12;
+                        const dest = audioContext.createMediaStreamDestination();
+                        masterGain.connect(dest);
+
+                        if (bgmType === 'peaceful') {
+                            // 차분한 음악: C major 코드
+                            [261.63, 329.63, 392.00].forEach((freq, i) => {
+                                const osc = audioContext.createOscillator();
+                                const gain = audioContext.createGain();
+                                osc.type = 'sine';
+                                osc.frequency.value = freq;
+                                gain.gain.value = 0.3 - (i * 0.05);
+                                osc.connect(gain);
+                                gain.connect(masterGain);
+                                osc.start(0);
+                            });
+                        } else if (bgmType === 'upbeat') {
+                            // 활기찬 음악: G major 코드
+                            [392.00, 493.88, 587.33].forEach((freq, i) => {
+                                const osc = audioContext.createOscillator();
+                                const gain = audioContext.createGain();
+                                osc.type = 'triangle';
+                                osc.frequency.value = freq;
+                                gain.gain.value = 0.25;
+                                osc.connect(gain);
+                                gain.connect(masterGain);
+                                osc.start(0);
+                            });
+                        } else if (bgmType === 'cinematic') {
+                            // 영화같은 음악: Am 코드
+                            [110.00, 130.81, 164.81, 220.00].forEach((freq, i) => {
+                                const osc = audioContext.createOscillator();
+                                const gain = audioContext.createGain();
+                                osc.type = 'sawtooth';
+                                osc.frequency.value = freq;
+                                gain.gain.value = 0.2 - (i * 0.03);
+                                osc.connect(gain);
+                                gain.connect(masterGain);
+                                osc.start(0);
+                            });
+                        }
+
+                        const audioTracks = dest.stream.getAudioTracks();
+                        const videoTracks = stream.getVideoTracks();
+                        combinedStream = new MediaStream([...videoTracks, ...audioTracks]);
+                        updateStatus('자동 생성 BGM이 포함된 영상을 제작합니다.');
+                    }
+                } catch (bgmError) {
+                    console.warn('BGM 추가 실패:', bgmError);
+                    updateStatus('BGM 추가 실패. 비디오만 녹화합니다.');
+                }
+            }
+            
+            const videoBitsPerSecond = parseInt(document.getElementById('videoQuality').value);
+            
+            // MP4 지원 확인
+            let options;
+            if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {
+                options = { mimeType: 'video/mp4;codecs=h264,aac', videoBitsPerSecond };
+            } else if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264')) {
+                options = { mimeType: 'video/mp4;codecs=h264', videoBitsPerSecond };
+            } else if (MediaRecorder.isTypeSupported('video/mp4')) {
+                options = { mimeType: 'video/mp4', videoBitsPerSecond };
+            } else {
+                updateStatus('❌ MP4 형식이 지원되지 않습니다. 브라우저를 업데이트해주세요.');
+                document.getElementById('recordBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+                return;
+            }
+            
+            mediaRecorder = new MediaRecorder(combinedStream, options);
+            
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) recordedChunks.push(event.data);
+            };
+            
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: options.mimeType });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                
+                const quality = getQualityText();
+                const imageDuration = parseFloat(document.getElementById('imageDuration').value);
+                const totalDuration = (imageDuration * validImages.length).toFixed(1);
+                
+                a.download = 'my-video-' + quality + '-' + totalDuration + 's-' + Date.now() + '.mp4';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                updateStatus(quality + ' MP4 영상 제작 완료! (총 ' + totalDuration + '초)');
+                updateProgressBar(0, 1);
+                document.getElementById('recordBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+                stopBGM();
+            };
+            
+            mediaRecorder.start();
+            isRecording = true;
+            document.getElementById('recordBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            
+            const duration = parseFloat(document.getElementById('imageDuration').value) * 1000;
+            const totalFrames = validImages.length;
+            const totalDuration = (duration * totalFrames / 1000).toFixed(1);
+            updateStatus('영상 제작 시작... (총 ' + totalDuration + '초 예상)');
+            
+            currentImageIndex = 0;
+            drawCurrentImage();
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            
+            for (let frameIndex = 0; frameIndex < totalFrames && isRecording; frameIndex++) {
+                currentImageIndex = frameIndex;
+                drawCurrentImage();
+                await new Promise(resolve => requestAnimationFrame(resolve));
+
+                updateProgressBar(frameIndex + 1, totalFrames);
+                updateStatus('영상 제작 중... (' + (frameIndex + 1) + '/' + totalFrames + ') - 총 ' + totalDuration + '초');
+
+                const frameStartTime = performance.now();
+                while (isRecording && (performance.now() - frameStartTime) < duration) {
+                    await new Promise(resolve => setTimeout(resolve, 16));
+                }
+            }
+
+            // 마지막 프레임의 완전한 duration 보장 (100ms 버퍼 추가)
+            if (isRecording) {
+                await new Promise(resolve => setTimeout(resolve, duration + 100));
+            }
+
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            
+        } catch (error) {
+            console.error('녹화 오류:', error);
+            updateStatus('녹화 중 오류가 발생했습니다: ' + error.message);
+            document.getElementById('recordBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            stopBGM();
+        }
+    }
+
+    function stopRecording() {
+        isRecording = false;
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+        }
+        document.getElementById('recordBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
+        updateProgressBar(0, 1);
+        updateStatus('녹화가 중지되었습니다.');
+        stopBGM();
+    }
+
+    function getQualityText() {
+        const bitrate = parseInt(document.getElementById('videoQuality').value);
+        if (bitrate >= 12000000) return '프리미엄화질';
+        if (bitrate >= 8000000) return '최고화질';
+        if (bitrate >= 5000000) return '고화질';
+        return '표준화질';
+    }
+
+    function updateStatus(message) {
+        const validImages = images.filter(img => img !== null);
+        const defaultMessage = validImages.length > 0 
+            ? validImages.length + '개 이미지 업로드됨. 영상을 제작해보세요!'
+            : '이미지를 업로드하고 영상을 제작해보세요!';
+        document.getElementById('status').textContent = message || defaultMessage;
+    }
+</script>

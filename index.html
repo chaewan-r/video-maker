@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <base target="_top">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>이미지 영상 제작기</title>
+    <?!= include('styles'); ?>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎬 이미지 영상 제작기</h1>
+            <p>이미지들을 선택하여 자막이 포함된 멋진 영상을 만들어보세요!</p>
+        </div>
+
+        <div class="main-content">
+            <!-- 이미지 업로드 섹션 -->
+            <section class="upload-section">
+                <h2>📸 이미지 업로드 (최대 50장)</h2>
+                
+                <!-- 빠른 업로드 버튼 -->
+                <div style="margin-bottom: 30px; text-align: center;">
+                    <button class="btn btn-primary" onclick="document.getElementById('bulkUpload').click()" style="font-size: 18px; padding: 15px 30px;">
+                        🚀 여러 이미지 한번에 업로드
+                    </button>
+                    <input type="file" id="bulkUpload" multiple accept="image/*" onchange="processBulkUpload()" style="display: none;">
+                    <p style="font-size: 14px; color: #666; margin-top: 10px;">💡 여러 이미지를 선택하면 자동으로 빈 슬롯에 배치됩니다</p>
+                </div>
+                
+                <div class="upload-grid" id="uploadGrid">
+                    <!-- 업로드 슬롯들이 여기에 동적 생성 -->
+                </div>
+                
+                <!-- 이미지/자막 지우기 버튼들 -->
+                <div style="margin-top: 20px; text-align: center; display: flex; justify-content: center; gap: 15px; flex-wrap: wrap;">
+                    <button class="btn btn-danger" onclick="clearAllImages()" style="font-size: 16px; padding: 12px 24px;">
+                        🖼️ 모든 이미지 지우기
+                    </button>
+                    <button class="btn btn-danger" onclick="clearAllSubtitles()" style="font-size: 16px; padding: 12px 24px;">
+                        📝 모든 자막 지우기
+                    </button>
+                    <button class="btn btn-danger" onclick="forceDeleteAllImages()" style="font-size: 16px; padding: 12px 24px;">
+                        🗑️ 이미지+자막 모두 지우기
+                    </button>
+                </div>
+            </section>
+
+            <!-- 설정 섹션 -->
+            <div class="settings-section">
+                <div class="setting-group">
+                    <h3>🎬 영상 설정</h3>
+                    <div class="form-group">
+                        <label for="videoSize">영상 크기:</label>
+                        <select id="videoSize" onchange="updateCanvasSize()">
+                            <option value="1920,1080">가로형 (1920×1080)</option>
+                            <option value="1080,1920">세로형 (1080×1920)</option>
+                            <option value="1080,1350">세로형 확장 (1080×1350)</option>
+                            <option value="1080,1080">정방형 (1080×1080)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="imageDuration">이미지당 재생 시간 (초):</label>
+                        <input type="number" id="imageDuration" min="0.1" max="10" step="0.1" value="2">
+                    </div>
+                    <div class="form-group">
+                        <label for="videoQuality">영상 화질:</label>
+                        <select id="videoQuality">
+                            <option value="2500000">표준 화질 (2.5Mbps)</option>
+                            <option value="5000000">고화질 (5Mbps)</option>
+                            <option value="8000000" selected>최고화질 (8Mbps) - 권장</option>
+                            <option value="12000000">프리미엄 (12Mbps)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="imageScaling">이미지 크기 조정:</label>
+                        <select id="imageScaling" onchange="drawCurrentImage()">
+                            <option value="cover">화면 채우기 (이미지 잘림)</option>
+                            <option value="contain">전체 이미지 보기 (여백 생김)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="backgroundColor">배경 색상:</label>
+                        <input type="color" id="backgroundColor" value="#000000" onchange="drawCurrentImage()">
+                    </div>
+                </div>
+
+                <!-- BGM 설정 -->
+                <div class="setting-group">
+                    <h3>🎵 배경음악 설정</h3>
+                    <div class="form-group">
+                        <label for="bgmType">BGM 타입:</label>
+                        <select id="bgmType" onchange="handleBGMTypeChange()">
+                            <option value="none">사용 안함</option>
+                            <option value="peaceful">차분한 음악</option>
+                            <option value="upbeat">활기찬 음악</option>
+                            <option value="cinematic">영화같은 음악</option>
+                            <option value="custom">커스텀 업로드</option>
+                        </select>
+                    </div>
+                    
+                    <!-- 커스텀 음악 업로드 섹션 -->
+                    <div class="form-group" id="customMusicSection" style="display: none;">
+                        <label>음악 파일 업로드:</label>
+                        <div style="margin-bottom: 15px;">
+                            <button class="btn btn-secondary" onclick="document.getElementById('musicUpload').click()" style="width: 100%; padding: 12px;">
+                                🎵 MP3 파일 선택하기
+                            </button>
+                            <input type="file" id="musicUpload" accept=".mp3" onchange="handleMusicUpload(this)" style="display: none;">
+                        </div>
+                        <div id="musicInfo" style="font-size: 14px; color: #666; padding: 15px; background: #fff; border-radius: 8px; border: 1px solid #ddd; display: none;">
+                            <div id="musicName" style="font-weight: bold; margin-bottom: 5px;"></div>
+                            <div id="musicSize" style="margin-bottom: 10px;"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="bgmVolume">BGM 볼륨:</label>
+                        <input type="range" id="bgmVolume" min="0" max="1" step="0.1" value="0.3" oninput="updateVolumeDisplay()">
+                        <small>현재 볼륨: <span id="volumeValue">30%</span></small>
+                    </div>
+
+                    <!-- BGM 구간 설정 -->
+                    <div class="form-group" id="bgmTimingSection" style="display: none;">
+                        <label>BGM 재생 구간:</label>
+                        <div style="margin-bottom: 10px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <small style="color: #666;">시작: <span id="bgmStartDisplay">0.0</span>초</small>
+                                <small style="color: #666;">종료: <span id="bgmEndDisplay">0.0</span>초</small>
+                                <small style="color: #666;">총: <span id="bgmDurationDisplay">0.0</span>초</small>
+                            </div>
+                            <input type="range" id="bgmStartTime" min="0" max="300" step="0.1" value="0"
+                                   oninput="updateBGMRangeDisplay()"
+                                   style="width: 100%; margin-bottom: 5px;">
+                            <input type="range" id="bgmEndTime" min="0" max="300" step="0.1" value="0"
+                                   oninput="updateBGMRangeDisplay()"
+                                   style="width: 100%;">
+                        </div>
+                        <small style="color: #666;">💡 슬라이더로 MP3의 특정 구간을 선택하세요 (종료가 0이면 전체 사용)</small>
+                    </div>
+
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <button class="btn btn-secondary" onclick="previewBGM()">🎧 BGM 미리듣기</button>
+                        <button class="btn btn-danger" onclick="stopBGMPreview()" style="font-size: 14px; padding: 8px 16px;">⏹️ 정지</button>
+                    </div>
+                </div>
+
+                <!-- 자막 설정 -->
+                <div class="setting-group">
+                    <h3>📝 자막 설정</h3>
+                    <div class="form-group">
+                        <label for="subtitleFontSize">폰트 크기:</label>
+                        <input type="range" id="subtitleFontSize" min="16" max="120" value="48" oninput="updateFontSizeDisplay(); previewSubtitle()">
+                        <small>현재 크기: <span id="fontSizeValue">48px</span></small>
+                    </div>
+                    <div class="form-group">
+                        <label for="subtitleColor">글자 색상:</label>
+                        <input type="color" id="subtitleColor" value="#ffffff" onchange="previewSubtitle()">
+                    </div>
+                    <div class="form-group">
+                        <label for="subtitlePosition">자막 위치:</label>
+                        <select id="subtitlePosition" onchange="previewSubtitle()">
+                            <option value="bottom">하단</option>
+                            <option value="center">중앙</option>
+                            <option value="top">상단</option>
+                            <option value="custom">커스텀 위치</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="customPositionGroup" style="display: none;">
+                        <label for="subtitleVerticalPosition">세로 위치 조절:</label>
+                        <input type="range" id="subtitleVerticalPosition" min="0" max="100" value="20" oninput="updatePositionDisplay(); previewSubtitle()">
+                        <small>화면 위쪽으로부터: <span id="positionValue">20%</span></small>
+                    </div>
+                    <div class="form-group">
+                        <label for="subtitleBackground">배경 사용:</label>
+                        <select id="subtitleBackground" onchange="previewSubtitle()">
+                            <option value="true">배경 있음</option>
+                            <option value="false">배경 없음</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="subtitleBgColor">배경 색상:</label>
+                        <input type="color" id="subtitleBgColor" value="#000000" onchange="previewSubtitle()">
+                    </div>
+                    <div class="form-group">
+                        <label for="subtitleOpacity">배경 투명도:</label>
+                        <input type="range" id="subtitleOpacity" min="0" max="1" step="0.1" value="0.7" oninput="updateOpacityDisplay(); previewSubtitle()">
+                        <small>현재 값: <span id="opacityValue">70%</span></small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 자막 입력 섹션 -->
+            <section class="upload-section">
+                <h2>💬 자막 설정</h2>
+                
+                <!-- 공통 자막 설정 -->
+                <div style="background: #e3f2fd; padding: 20px; border-radius: 10px; margin-bottom: 30px;">
+                    <h3 style="margin-bottom: 15px; color: #1565c0;">📢 모든 이미지에 동일한 자막 적용</h3>
+                    <div style="display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap;">
+                        <div style="flex: 1; min-width: 300px;">
+                            <label style="display: block; margin-bottom: 8px; font-weight: bold; color: #333;">공통 자막 내용:</label>
+                            <textarea 
+                                id="commonSubtitle"
+                                placeholder="모든 이미지에 적용할 자막을 입력하세요..."
+                                style="width: 100%; padding: 10px; border: 2px solid #1976d2; border-radius: 8px; font-size: 14px; resize: vertical; min-height: 80px;"
+                            ></textarea>
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <button class="btn btn-primary" onclick="applyCommonSubtitle()" style="padding: 12px 20px;">
+                                ✅ 모든 이미지에 적용
+                            </button>
+                            <button class="btn btn-secondary" onclick="clearCommonSubtitle()" style="padding: 12px 20px;">
+                                🗑️ 공통 자막 지우기
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 개별 자막 설정 -->
+                <h3 style="margin-bottom: 15px;">📝 이미지별 개별 자막 설정</h3>
+                <div id="subtitleInputs" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">
+                    <p style="text-align: center; color: #666; font-style: italic;">이미지를 업로드하면 각 이미지별 자막을 설정할 수 있습니다.</p>
+                </div>
+            </section>
+
+            <!-- 미리보기 섹션 -->
+            <section class="canvas-section">
+                <h2>👀 미리보기</h2>
+                <div class="canvas-container">
+                    <canvas id="videoCanvas" width="400" height="225"></canvas>
+                    <div class="ratio-indicator" id="ratioIndicator">16:9</div>
+                </div>
+                <div class="controls">
+                    <button class="btn btn-primary" onclick="startPreview()">▶️ 미리보기 시작</button>
+                </div>
+            </section>
+
+            <!-- 영상 제작 섹션 -->
+            <section>
+                <h2>🎥 영상 제작</h2>
+                <div class="controls">
+                    <button class="btn btn-success" onclick="startRecording()" id="recordBtn">🔴 영상 제작 시작</button>
+                    <button class="btn btn-danger" onclick="stopRecording()" id="stopBtn" disabled>⏹️ 제작 중지</button>
+                </div>
+                
+                <div class="status-section">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div class="status" id="status">이미지를 업로드하고 영상을 제작해보세요!</div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <?!= include('javascript'); ?>
+</body>
+</html>
