@@ -5,6 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>이미지 영상 제작기</title>
+    <!-- FFmpeg.wasm CDN (안정 버전) -->
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
     <?!= include('styles'); ?>
 </head>
 <body>
@@ -46,6 +48,40 @@
                 </div>
             </section>
 
+            <!-- 엔딩 이미지 업로드 섹션 -->
+            <section class="upload-section">
+                <h2>🎬 엔딩 이미지 업로드 (최대 10장)</h2>
+
+                <!-- 빠른 업로드 버튼 -->
+                <div style="margin-bottom: 30px; text-align: center;">
+                    <button class="btn btn-primary" onclick="document.getElementById('endingBulkUpload').click()" style="font-size: 18px; padding: 15px 30px;">
+                        🌟 엔딩 이미지 한번에 업로드
+                    </button>
+                    <input type="file" id="endingBulkUpload" multiple accept="image/*" onchange="processEndingBulkUpload()" style="display: none;">
+                    <p style="font-size: 14px; color: #666; margin-top: 10px;">💡 영상 마지막에 표시될 이미지들입니다</p>
+                </div>
+
+                <div class="upload-grid" id="endingUploadGrid">
+                    <!-- 엔딩 업로드 슬롯들이 여기에 동적 생성 -->
+                </div>
+
+                <!-- 엔딩 이미지 설정 -->
+                <div style="margin-top: 20px; background: #fff3cd; padding: 20px; border-radius: 10px;">
+                    <h3 style="margin-bottom: 15px; color: #856404;">⚙️ 엔딩 이미지 설정</h3>
+                    <div class="form-group">
+                        <label for="endingImageDuration">엔딩 이미지당 재생 시간 (초):</label>
+                        <input type="number" id="endingImageDuration" min="0.1" max="10" step="0.1" value="3">
+                    </div>
+                </div>
+
+                <!-- 엔딩 이미지 지우기 버튼 -->
+                <div style="margin-top: 20px; text-align: center;">
+                    <button class="btn btn-danger" onclick="clearAllEndingImages()" style="font-size: 16px; padding: 12px 24px;">
+                        🗑️ 모든 엔딩 이미지 지우기
+                    </button>
+                </div>
+            </section>
+
             <!-- 설정 섹션 -->
             <div class="settings-section">
                 <div class="setting-group">
@@ -56,12 +92,12 @@
                             <option value="1920,1080">가로형 (1920×1080)</option>
                             <option value="1080,1920">세로형 (1080×1920)</option>
                             <option value="1080,1350">세로형 확장 (1080×1350)</option>
-                            <option value="1080,1080">정방형 (1080×1080)</option>
+                            <option value="1080,1080" selected>정방형 (1080×1080)</option>
                         </select>
                     </div>
                     <div class="form-group">
                         <label for="imageDuration">이미지당 재생 시간 (초):</label>
-                        <input type="number" id="imageDuration" min="0.1" max="10" step="0.1" value="2">
+                        <input type="number" id="imageDuration" min="0.1" max="10" step="0.1" value="1">
                     </div>
                     <div class="form-group">
                         <label for="videoQuality">영상 화질:</label>
@@ -218,9 +254,15 @@
                 </div>
                 
                 <!-- 개별 자막 설정 -->
-                <h3 style="margin-bottom: 15px;">📝 이미지별 개별 자막 설정</h3>
+                <h3 style="margin-bottom: 15px;">📝 메인 이미지별 개별 자막 설정</h3>
                 <div id="subtitleInputs" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">
                     <p style="text-align: center; color: #666; font-style: italic;">이미지를 업로드하면 각 이미지별 자막을 설정할 수 있습니다.</p>
+                </div>
+
+                <!-- 엔딩 이미지 자막 설정 -->
+                <h3 style="margin-bottom: 15px; margin-top: 30px;">🎬 엔딩 이미지별 개별 자막 설정</h3>
+                <div id="endingSubtitleInputs" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">
+                    <p style="text-align: center; color: #666; font-style: italic;">엔딩 이미지를 업로드하면 각 이미지별 자막을 설정할 수 있습니다.</p>
                 </div>
             </section>
 

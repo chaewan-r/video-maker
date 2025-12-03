@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>이미지 영상 제작기 (FFmpeg.wasm)</title>
+    <!-- FFmpeg.wasm CDN (안정 버전) -->
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+    <style>
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "맑은 고딕", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    body {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        padding: 20px;
+    }
+
+    .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        overflow: hidden;
+    }
+
+    .header {
+        background: linear-gradient(45deg, #667eea, #764ba2);
+        color: white;
+        padding: 30px;
+        text-align: center;
+    }
+
+    .header h1 {
+        font-size: 2.5em;
+        margin-bottom: 10px;
+    }
+
+    .header p {
+        font-size: 1.1em;
+        opacity: 0.9;
+    }
+
+    .ffmpeg-badge {
+        display: inline-block;
+        background: rgba(255,255,255,0.2);
+        padding: 8px 15px;
+        border-radius: 20px;
+        font-size: 0.9em;
+        margin-top: 10px;
+    }
+
+    .main-content {
+        padding: 40px;
+    }
+
+    .upload-section {
+        margin-bottom: 40px;
+    }
+
+    .upload-section h2 {
+        color: #495057;
+        margin-bottom: 20px;
+        font-size: 1.5em;
+    }
+
+    .upload-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 15px;
+        margin-top: 20px;
+    }
+
+    .upload-slot {
+        position: relative;
+        aspect-ratio: 16/9;
+        border: 2px dashed #ddd;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        background: #f8f9fa;
+    }
+
+    .upload-slot:hover {
+        border-color: #667eea;
+        background: #f0f0ff;
+    }
+
+    .upload-slot.has-image {
+        border-color: #28a745;
+        background: none;
+    }
+
+    .upload-slot.dragging {
+        opacity: 0.5;
+        cursor: move;
+    }
+
+    .upload-slot.drag-over {
+        border-color: #667eea;
+        background: #f0f0ff;
+        transform: scale(1.05);
+    }
+
+    .upload-slot[draggable="true"] {
+        cursor: move;
+    }
+
+    .upload-slot input {
+        position: absolute;
+        opacity: 0;
+        width: 100%;
+        height: 100%;
+        cursor: pointer;
+    }
+
+    .upload-slot img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        border-radius: 8px;
+    }
+
+    .slot-number {
+        position: absolute;
+        top: 5px;
+        left: 5px;
+        background: rgba(0,0,0,0.7);
+        color: white;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: bold;
+    }
+
+    .remove-btn {
+        position: absolute;
+        top: 5px;
+        right: 5px;
+        background: #dc3545;
+        color: white;
+        border: none;
+        border-radius: 50%;
+        width: 24px;
+        height: 24px;
+        cursor: pointer;
+        font-size: 14px;
+    }
+
+    .settings-section {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 30px;
+        margin-bottom: 40px;
+    }
+
+    .setting-group {
+        background: #f8f9fa;
+        padding: 25px;
+        border-radius: 15px;
+        border: 1px solid #e9ecef;
+    }
+
+    .setting-group h3 {
+        color: #495057;
+        margin-bottom: 20px;
+        font-size: 1.3em;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .form-group {
+        margin-bottom: 15px;
+    }
+
+    label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+        color: #555;
+    }
+
+    select, input, textarea {
+        width: 100%;
+        padding: 10px;
+        border: 2px solid #e9ecef;
+        border-radius: 8px;
+        font-size: 14px;
+        transition: border-color 0.3s ease;
+    }
+
+    select:focus, input:focus, textarea:focus {
+        outline: none;
+        border-color: #667eea;
+    }
+
+    .canvas-section {
+        text-align: center;
+        margin-bottom: 40px;
+    }
+
+    .canvas-section h2 {
+        color: #495057;
+        margin-bottom: 20px;
+        font-size: 1.5em;
+    }
+
+    .canvas-container {
+        display: inline-block;
+        position: relative;
+        border-radius: 15px;
+        overflow: hidden;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        margin: 20px 0;
+    }
+
+    #videoCanvas {
+        display: block;
+        max-width: 100%;
+        height: auto;
+    }
+
+    .ratio-indicator {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: rgba(0,0,0,0.7);
+        color: white;
+        padding: 5px 10px;
+        border-radius: 15px;
+        font-size: 12px;
+        font-weight: bold;
+    }
+
+    .controls {
+        display: flex;
+        justify-content: center;
+        gap: 15px;
+        margin-top: 20px;
+        flex-wrap: wrap;
+    }
+
+    .btn {
+        padding: 12px 24px;
+        border: none;
+        border-radius: 25px;
+        font-size: 16px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .btn-primary {
+        background: linear-gradient(45deg, #667eea, #764ba2);
+        color: white;
+    }
+
+    .btn-secondary {
+        background: #6c757d;
+        color: white;
+    }
+
+    .btn-success {
+        background: #28a745;
+        color: white;
+    }
+
+    .btn-danger {
+        background: #dc3545;
+        color: white;
+    }
+
+    .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+    }
+
+    .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+    }
+
+    .status-section {
+        background: #f8f9fa;
+        padding: 20px;
+        border-radius: 15px;
+        text-align: center;
+        margin-top: 30px;
+    }
+
+    .status {
+        font-size: 16px;
+        font-weight: 500;
+        color: #495057;
+    }
+
+    .progress-bar {
+        width: 100%;
+        height: 8px;
+        background: #e9ecef;
+        border-radius: 4px;
+        margin: 15px 0;
+        overflow: hidden;
+    }
+
+    .progress-fill {
+        height: 100%;
+        background: linear-gradient(45deg, #667eea, #764ba2);
+        border-radius: 4px;
+        width: 0%;
+        transition: width 0.3s ease;
+    }
+
+    section h2 {
+        color: #495057;
+        margin-bottom: 20px;
+        font-size: 1.5em;
+    }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎬 이미지 영상 제작기</h1>
+            <p>이미지들을 선택하여 자막이 포함된 멋진 영상을 만들어보세요!</p>
+            <div class="ffmpeg-badge">⚡ FFmpeg.wasm 적용 - 마지막 프레임 완벽 렌더링</div>
+        </div>
+
+        <div class="main-content">
+            <!-- 간단한 테스트 버전 -->
+            <section class="upload-section">
+                <h2>📸 이미지 업로드 (간단 테스트)</h2>
+
+                <div style="margin-bottom: 30px; text-align: center;">
+                    <button class="btn btn-primary" onclick="document.getElementById('bulkUpload').click()" style="font-size: 18px; padding: 15px 30px;">
+                        🚀 이미지 업로드 (최대 10장)
+                    </button>
+                    <input type="file" id="bulkUpload" multiple accept="image/*" onchange="processBulkUpload()" style="display: none;">
+                    <p style="font-size: 14px; color: #666; margin-top: 10px;">💡 여러 이미지를 선택하면 자동으로 슬롯에 배치됩니다</p>
+                </div>
+
+                <div class="upload-grid" id="uploadGrid">
+                    <!-- 업로드 슬롯들이 여기에 동적 생성 -->
+                </div>
+            </section>
+
+            <!-- 설정 섹션 -->
+            <div class="settings-section">
+                <div class="setting-group">
+                    <h3>🎬 영상 설정</h3>
+                    <div class="form-group">
+                        <label for="imageDuration">이미지당 재생 시간 (초):</label>
+                        <input type="number" id="imageDuration" min="0.5" max="10" step="0.5" value="2">
+                    </div>
+                    <div class="form-group">
+                        <label for="videoQuality">영상 화질:</label>
+                        <select id="videoQuality">
+                            <option value="2500000">표준 화질 (2.5Mbps)</option>
+                            <option value="5000000">고화질 (5Mbps)</option>
+                            <option value="8000000" selected>최고화질 (8Mbps)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <h3>📝 자막 설정</h3>
+                    <div class="form-group">
+                        <label for="subtitleFontSize">폰트 크기:</label>
+                        <input type="range" id="subtitleFontSize" min="24" max="80" value="48" oninput="updateFontSizeDisplay()">
+                        <small>현재 크기: <span id="fontSizeValue">48px</span></small>
+                    </div>
+                    <div class="form-group">
+                        <label for="subtitleColor">글자 색상:</label>
+                        <input type="color" id="subtitleColor" value="#ffffff">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 자막 입력 -->
+            <section class="upload-section">
+                <h2>💬 자막 설정</h2>
+                <div id="subtitleInputs" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">
+                    <p style="text-align: center; color: #666; font-style: italic;">이미지를 업로드하면 자막을 설정할 수 있습니다.</p>
+                </div>
+            </section>
+
+            <!-- 미리보기 -->
+            <section class="canvas-section">
+                <h2>👀 미리보기</h2>
+                <div class="canvas-container">
+                    <canvas id="videoCanvas" width="1080" height="1080"></canvas>
+                    <div class="ratio-indicator" id="ratioIndicator">1:1</div>
+                </div>
+            </section>
+
+            <!-- 영상 제작 -->
+            <section>
+                <h2>🎥 영상 제작</h2>
+                <div class="controls">
+                    <button class="btn btn-success" onclick="startRecording()" id="recordBtn">🔴 FFmpeg으로 영상 제작</button>
+                    <button class="btn btn-danger" onclick="stopRecording()" id="stopBtn" disabled>⏹️ 제작 중지</button>
+                </div>
+
+                <div class="status-section">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div class="status" id="status">FFmpeg 로딩 중...</div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        // 전역 변수
+        const MAX_IMAGES = 10; // 테스트용으로 10개로 제한
+        let images = new Array(MAX_IMAGES).fill(null);
+        let subtitles = new Array(MAX_IMAGES).fill('');
+        let currentImageIndex = 0;
+        let isRecording = false;
+
+        // FFmpeg.wasm 변수
+        let ffmpeg = null;
+        let ffmpegLoaded = false;
+
+        // 초기화
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeUploadSlots();
+            drawCurrentImage();
+            loadFFmpeg();
+        });
+
+        // FFmpeg.wasm 초기화
+        async function loadFFmpeg() {
+            try {
+                const { createFFmpeg, fetchFile } = FFmpeg;
+                ffmpeg = createFFmpeg({
+                    log: true,
+                    corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js'
+                });
+
+                ffmpeg.setProgress(({ ratio }) => {
+                    if (ratio > 0 && ratio < 1) {
+                        const percent = Math.round(ratio * 100);
+                        updateStatus('FFmpeg 인코딩 중... ' + percent + '%');
+                    }
+                });
+
+                updateStatus('FFmpeg 로딩 중... (최초 1회만 소요, 약 30초)');
+                await ffmpeg.load();
+                ffmpegLoaded = true;
+                window.fetchFile = fetchFile; // 전역으로 저장
+                updateStatus('✅ FFmpeg 로딩 완료! 이제 영상을 제작할 수 있습니다.');
+                console.log('FFmpeg.wasm loaded successfully');
+            } catch (error) {
+                console.error('FFmpeg 로딩 실패:', error);
+                updateStatus('❌ FFmpeg 로딩 실패: ' + error.message);
+                ffmpegLoaded = false;
+            }
+        }
+
+        // 업로드 슬롯 초기화
+        function initializeUploadSlots() {
+            const uploadGrid = document.getElementById('uploadGrid');
+            uploadGrid.innerHTML = '';
+            for (let i = 0; i < MAX_IMAGES; i++) {
+                const slot = document.createElement('div');
+                slot.className = 'upload-slot';
+                slot.dataset.index = i;
+                slot.innerHTML = `
+                    <input type="file" accept="image/*" onchange="handleImageUpload(${i}, this)">
+                    <div class="slot-number">${i + 1}</div>
+                    <div style="font-size: 24px; color: #999;">+</div>
+                `;
+                uploadGrid.appendChild(slot);
+            }
+        }
+
+        // 일괄 업로드
+        function processBulkUpload() {
+            const bulkInput = document.getElementById('bulkUpload');
+            const files = Array.from(bulkInput.files);
+            if (files.length === 0) return;
+
+            const emptySlots = [];
+            for (let i = 0; i < MAX_IMAGES; i++) {
+                if (images[i] === null) emptySlots.push(i);
+            }
+
+            if (emptySlots.length === 0) {
+                updateStatus('모든 슬롯이 가득 찼습니다!');
+                bulkInput.value = '';
+                return;
+            }
+
+            const uploadCount = Math.min(files.length, emptySlots.length);
+            let completedUploads = 0;
+
+            files.slice(0, uploadCount).forEach((file, fileIndex) => {
+                const slotIndex = emptySlots[fileIndex];
+                const reader = new FileReader();
+
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        images[slotIndex] = img;
+                        const slot = document.querySelectorAll('.upload-slot')[slotIndex];
+                        slot.classList.add('has-image');
+                        slot.innerHTML = `
+                            <img src="${event.target.result}" alt="이미지 ${slotIndex + 1}">
+                            <div class="slot-number">${slotIndex + 1}</div>
+                            <button class="remove-btn" onclick="removeImage(${slotIndex})">×</button>
+                        `;
+
+                        completedUploads++;
+                        if (completedUploads === uploadCount) {
+                            generateSubtitleInputs();
+                            updateStatus(uploadCount + '개 이미지 업로드 완료!');
+                            bulkInput.value = '';
+                            drawCurrentImage();
+                        }
+                    };
+                    img.src = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // 개별 이미지 업로드
+        function handleImageUpload(index, input) {
+            const file = input.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    images[index] = img;
+                    const slot = input.parentElement;
+                    slot.classList.add('has-image');
+                    slot.innerHTML = `
+                        <img src="${event.target.result}" alt="이미지 ${index + 1}">
+                        <div class="slot-number">${index + 1}</div>
+                        <button class="remove-btn" onclick="removeImage(${index})">×</button>
+                    `;
+                    generateSubtitleInputs();
+                    updateStatus();
+                    drawCurrentImage();
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // 이미지 제거
+        function removeImage(index) {
+            images[index] = null;
+            subtitles[index] = '';
+            const slot = document.querySelectorAll('.upload-slot')[index];
+            slot.classList.remove('has-image');
+            slot.innerHTML = `
+                <input type="file" accept="image/*" onchange="handleImageUpload(${index}, this)">
+                <div class="slot-number">${index + 1}</div>
+                <div style="font-size: 24px; color: #999;">+</div>
+            `;
+            generateSubtitleInputs();
+            updateStatus();
+            drawCurrentImage();
+        }
+
+        // 자막 입력 필드 생성
+        function generateSubtitleInputs() {
+            const container = document.getElementById('subtitleInputs');
+            const validImageIndices = images.map((img, index) => img !== null ? index : -1).filter(index => index !== -1);
+
+            if (validImageIndices.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #666; font-style: italic;">이미지를 업로드하면 자막을 설정할 수 있습니다.</p>';
+                return;
+            }
+
+            container.innerHTML = validImageIndices.map(index => `
+                <div style="background: #fff; padding: 20px; border-radius: 10px; border: 1px solid #ddd;">
+                    <label style="display: block; margin-bottom: 10px; font-weight: bold; color: #333;">
+                        이미지 ${index + 1}번 자막:
+                    </label>
+                    <textarea
+                        placeholder="이 이미지에 표시할 자막을 입력하세요..."
+                        style="width: 100%; padding: 10px; border: 2px solid #e9ecef; border-radius: 8px; font-size: 14px; resize: vertical; min-height: 80px;"
+                        oninput="updateSubtitle(${index}, this.value)"
+                    >${subtitles[index] || ''}</textarea>
+                </div>
+            `).join('');
+        }
+
+        function updateSubtitle(index, value) {
+            subtitles[index] = value;
+            drawCurrentImage();
+        }
+
+        function updateFontSizeDisplay() {
+            document.getElementById('fontSizeValue').textContent = document.getElementById('subtitleFontSize').value + 'px';
+        }
+
+        // 캔버스에 현재 이미지 그리기
+        function drawCurrentImage() {
+            const canvas = document.getElementById('videoCanvas');
+            const ctx = canvas.getContext('2d');
+            const validImages = images.filter(img => img !== null);
+
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (validImages.length === 0) {
+                ctx.fillStyle = '#999';
+                ctx.font = '24px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('이미지를 업로드해주세요', canvas.width/2, canvas.height/2);
+                return;
+            }
+
+            const img = validImages[currentImageIndex % validImages.length];
+            if (!img) return;
+
+            // 이미지 그리기 (cover 방식)
+            const canvasAspect = canvas.width / canvas.height;
+            const imgAspect = img.width / img.height;
+            let drawWidth, drawHeight, drawX, drawY;
+
+            if (imgAspect > canvasAspect) {
+                drawHeight = canvas.height;
+                drawWidth = drawHeight * imgAspect;
+                drawX = (canvas.width - drawWidth) / 2;
+                drawY = 0;
+            } else {
+                drawWidth = canvas.width;
+                drawHeight = drawWidth / imgAspect;
+                drawX = 0;
+                drawY = (canvas.height - drawHeight) / 2;
+            }
+
+            ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+
+            // 자막 그리기
+            const validImageIndices = images.map((img, index) => img !== null ? index : -1).filter(index => index !== -1);
+            if (validImageIndices.length === 0) return;
+
+            const actualImageIndex = validImageIndices[currentImageIndex % validImageIndices.length];
+            const text = subtitles[actualImageIndex];
+            if (!text || text.trim() === '') return;
+
+            const fontSize = parseInt(document.getElementById('subtitleFontSize').value);
+            const fontColor = document.getElementById('subtitleColor').value;
+
+            ctx.font = 'bold ' + fontSize + 'px "Malgun Gothic", "맑은 고딕", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            const maxWidth = canvas.width * 0.9;
+            const words = text.split(' ');
+            const lines = [];
+            let currentLine = words[0] || '';
+
+            for (let i = 1; i < words.length; i++) {
+                const word = words[i];
+                const width = ctx.measureText(currentLine + " " + word).width;
+                if (width < maxWidth) {
+                    currentLine += " " + word;
+                } else {
+                    lines.push(currentLine);
+                    currentLine = word;
+                }
+            }
+            if (currentLine) lines.push(currentLine);
+
+            const lineHeight = fontSize * 1.2;
+            const startY = canvas.height - 100;
+
+            lines.forEach((line, index) => {
+                const x = canvas.width / 2;
+                const y = startY + (index * lineHeight);
+
+                // 배경
+                const textWidth = ctx.measureText(line).width;
+                const padding = 20;
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(x - textWidth / 2 - padding, y - fontSize / 2 - padding / 2, textWidth + padding * 2, fontSize + padding);
+
+                // 텍스트
+                ctx.fillStyle = fontColor;
+                ctx.fillText(line, x, y);
+            });
+        }
+
+        // FFmpeg으로 영상 제작
+        async function startRecording() {
+            const validImages = images.filter(img => img !== null);
+
+            if (validImages.length === 0) {
+                updateStatus('먼저 이미지를 업로드해주세요!');
+                return;
+            }
+
+            if (!ffmpegLoaded || !ffmpeg) {
+                updateStatus('❌ FFmpeg이 로딩되지 않았습니다. 페이지를 새로고침해주세요.');
+                return;
+            }
+
+            try {
+                document.getElementById('recordBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+                isRecording = true;
+
+                const canvas = document.getElementById('videoCanvas');
+                const duration = parseFloat(document.getElementById('imageDuration').value);
+                const fps = 30;
+
+                updateStatus('프레임 캡처 시작...');
+
+                const fetchFile = window.fetchFile;
+                let frameNumber = 0;
+
+                // 모든 이미지의 프레임 생성
+                for (let i = 0; i < validImages.length; i++) {
+                    currentImageIndex = i;
+                    drawCurrentImage();
+
+                    const framesForThisImage = Math.round(duration * fps);
+
+                    for (let f = 0; f < framesForThisImage; f++) {
+                        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                        const fileName = 'frame' + String(frameNumber).padStart(6, '0') + '.png';
+                        ffmpeg.FS('writeFile', fileName, await fetchFile(blob));
+                        frameNumber++;
+                    }
+
+                    updateProgressBar(i + 1, validImages.length);
+                    updateStatus('프레임 캡처 중... (' + (i + 1) + '/' + validImages.length + ')');
+                }
+
+                updateStatus('FFmpeg으로 영상 인코딩 중...');
+
+                // FFmpeg으로 영상 생성
+                const videoBitrate = document.getElementById('videoQuality').value;
+                const bitrateK = Math.round(parseInt(videoBitrate) / 1000) + 'k';
+
+                await ffmpeg.run(
+                    '-framerate', String(fps),
+                    '-start_number', '0',
+                    '-i', 'frame%06d.png',
+                    '-frames:v', String(frameNumber),
+                    '-c:v', 'libx264',
+                    '-b:v', bitrateK,
+                    '-pix_fmt', 'yuv420p',
+                    '-movflags', '+faststart',
+                    'output.mp4'
+                );
+
+                // 결과 다운로드
+                const data = ffmpeg.FS('readFile', 'output.mp4');
+                const blob = new Blob([data.buffer], { type: 'video/mp4' });
+                const url = URL.createObjectURL(blob);
+
+                const a = document.createElement('a');
+                a.href = url;
+                const totalDuration = (duration * validImages.length).toFixed(1);
+                a.download = 'video-ffmpeg-' + totalDuration + 's-' + Date.now() + '.mp4';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                // 임시 파일 정리
+                for (let i = 0; i < frameNumber; i++) {
+                    const fileName = 'frame' + String(i).padStart(6, '0') + '.png';
+                    try { ffmpeg.FS('unlink', fileName); } catch (e) {}
+                }
+                try { ffmpeg.FS('unlink', 'output.mp4'); } catch (e) {}
+
+                updateStatus('✅ FFmpeg 영상 제작 완료! (총 ' + totalDuration + '초, ' + frameNumber + ' 프레임)');
+                updateProgressBar(0, 1);
+                document.getElementById('recordBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+                isRecording = false;
+
+            } catch (error) {
+                console.error('FFmpeg 녹화 오류:', error);
+                updateStatus('❌ FFmpeg 오류: ' + error.message);
+                document.getElementById('recordBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+                isRecording = false;
+            }
+        }
+
+        function stopRecording() {
+            isRecording = false;
+            document.getElementById('recordBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            updateProgressBar(0, 1);
+            updateStatus('녹화가 중지되었습니다.');
+        }
+
+        function updateProgressBar(current, total) {
+            document.getElementById('progressFill').style.width = (total > 0 ? (current / total) * 100 : 0) + '%';
+        }
+
+        function updateStatus(message) {
+            const validImages = images.filter(img => img !== null);
+            let defaultMessage = 'FFmpeg 준비 완료! 이미지를 업로드하고 영상을 제작해보세요!';
+            if (validImages.length > 0) {
+                defaultMessage = validImages.length + '개 이미지 업로드됨. 영상을 제작해보세요!';
+            }
+            document.getElementById('status').textContent = message || defaultMessage;
+        }
+    </script>
+</body>
+</html>

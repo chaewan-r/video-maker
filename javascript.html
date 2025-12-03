@@ -1,8 +1,11 @@
 <script>
     // 전역 변수
     const MAX_IMAGES = 50;
+    const MAX_ENDING_IMAGES = 10;
     let images = new Array(MAX_IMAGES).fill(null);
     let subtitles = new Array(MAX_IMAGES).fill('');
+    let endingImages = new Array(MAX_ENDING_IMAGES).fill(null);
+    let endingSubtitles = new Array(MAX_ENDING_IMAGES).fill('');
     let currentImageIndex = 0;
     let previewInterval = null;
     let mediaRecorder = null;
@@ -11,16 +14,51 @@
     let customMusicFile = null;
     let bgmAudio = null;
 
+    // FFmpeg.wasm 변수
+    let ffmpeg = null;
+    let ffmpegLoaded = false;
+
     // 초기화
     document.addEventListener('DOMContentLoaded', () => {
         initializeUploadSlots();
+        initializeEndingUploadSlots();
         updateCanvasSize();
         updateOpacityDisplay();
         updateVolumeDisplay();
         updatePositionDisplay();
         updateFontSizeDisplay();
         drawCurrentImage();
+        loadFFmpeg(); // FFmpeg 초기화
     });
+
+    // FFmpeg.wasm 초기화
+    async function loadFFmpeg() {
+        try {
+            const { createFFmpeg, fetchFile } = FFmpeg;
+            ffmpeg = createFFmpeg({
+                log: true,
+                corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js'
+            });
+
+            ffmpeg.setProgress(({ ratio }) => {
+                if (ratio > 0 && ratio < 1) {
+                    const percent = Math.round(ratio * 100);
+                    updateStatus('FFmpeg 인코딩 중... ' + percent + '%');
+                }
+            });
+
+            updateStatus('FFmpeg 로딩 중... (최초 1회만 30초 소요)');
+            await ffmpeg.load();
+            ffmpegLoaded = true;
+            window.fetchFile = fetchFile; // 전역으로 저장
+            updateStatus('FFmpeg 로딩 완료! 이제 영상을 제작할 수 있습니다.');
+            console.log('FFmpeg.wasm loaded successfully');
+        } catch (error) {
+            console.error('FFmpeg 로딩 실패:', error);
+            updateStatus('⚠️ FFmpeg 로딩 실패. 기본 방식으로 작동합니다.');
+            ffmpegLoaded = false;
+        }
+    }
 
     // 드래그앤드롭 관련 변수
     let draggedSlotIndex = null;
@@ -414,6 +452,34 @@
         previewSubtitle();
     }
 
+    // 엔딩 자막 입력 필드 생성
+    function generateEndingSubtitleInputs() {
+        const container = document.getElementById('endingSubtitleInputs');
+        const validEndingIndices = endingImages.map((img, index) => img !== null ? index : -1).filter(index => index !== -1);
+
+        if (validEndingIndices.length === 0) {
+            container.innerHTML = '<p style="text-align: center; color: #666; font-style: italic;">엔딩 이미지를 업로드하면 각 이미지별 자막을 설정할 수 있습니다.</p>';
+            return;
+        }
+
+        container.innerHTML = validEndingIndices.map(index => `
+            <div style="background: #fff3cd; padding: 20px; border-radius: 10px; border: 1px solid #ffc107;">
+                <label style="display: block; margin-bottom: 10px; font-weight: bold; color: #856404;">
+                    엔딩 이미지 E${index + 1}번 자막:
+                </label>
+                <textarea
+                    placeholder="이 엔딩 이미지에 표시할 자막을 입력하세요..."
+                    style="width: 100%; padding: 10px; border: 2px solid #ffc107; border-radius: 8px; font-size: 14px; resize: vertical; min-height: 80px;"
+                    oninput="updateEndingSubtitle(${index}, this.value)"
+                >${endingSubtitles[index] || ''}</textarea>
+            </div>
+        `).join('');
+    }
+
+    function updateEndingSubtitle(index, value) {
+        endingSubtitles[index] = value;
+    }
+
     function previewSubtitle() {
         document.getElementById('customPositionGroup').style.display = 
             document.getElementById('subtitlePosition').value === 'custom' ? 'block' : 'none';
@@ -514,8 +580,8 @@
                 bgmAudio.currentTime = startTime;
 
                 bgmAudio.addEventListener('loadeddata', () => {
-                    const duration = endTime > startTime ? endTime - startTime : 10;
-                    updateStatus('커스텀 MP3 미리듣기 중... (' + Math.min(duration, 10).toFixed(1) + '초)');
+                    const duration = endTime > startTime ? endTime - startTime : bgmAudio.duration;
+                    updateStatus('커스텀 MP3 미리듣기 중... (' + duration.toFixed(1) + '초)');
                     bgmAudio.play();
 
                     // 종료 시점 체크
@@ -528,9 +594,13 @@
                             }
                         }, 100);
                         bgmAudio.dataset.checkInterval = checkInterval;
+                    } else {
+                        // 구간 설정이 없으면 끝까지 재생
+                        bgmAudio.addEventListener('ended', () => {
+                            stopBGM();
+                            updateStatus();
+                        }, { once: true });
                     }
-
-                    setTimeout(() => { stopBGM(); updateStatus(); }, Math.min(duration, 10) * 1000);
                 });
 
                 bgmAudio.addEventListener('error', () => {
@@ -606,8 +676,7 @@
                 bgmAudio = { oscillators, audioContext };
 
                 const bgmNames = { 'peaceful': '차분한', 'upbeat': '활기찬', 'cinematic': '영화같은' };
-                updateStatus(bgmNames[bgmType] + ' BGM 미리듣기 중... (10초 후 자동 정지)');
-                setTimeout(() => { stopBGM(); updateStatus(); }, 10000);
+                updateStatus(bgmNames[bgmType] + ' BGM 미리듣기 중... (⏹️ 정지 버튼으로 중지)');
             } catch (error) {
                 updateStatus('BGM 재생 중 오류가 발생했습니다.');
             }
@@ -791,30 +860,160 @@
         });
     }
 
-    function startPreview() {
+    async function startPreview() {
         const validImages = images.filter(img => img !== null);
-        if (validImages.length === 0) {
+        const validEndingImages = endingImages.filter(img => img !== null);
+
+        if (validImages.length === 0 && validEndingImages.length === 0) {
             updateStatus('먼저 이미지를 업로드해주세요!');
             return;
         }
 
         stopPreview();
         const duration = parseFloat(document.getElementById('imageDuration').value) * 1000;
-        currentImageIndex = 0;
+        const endingDuration = parseFloat(document.getElementById('endingImageDuration')?.value || 3) * 1000;
+        const totalFrames = validImages.length + validEndingImages.length;
 
-        drawCurrentImage();
-        updateProgressBar(0, validImages.length);
-
-        previewInterval = setInterval(() => {
-            currentImageIndex = (currentImageIndex + 1) % validImages.length;
-            drawCurrentImage();
-            updateProgressBar(currentImageIndex, validImages.length);
-        }, duration);
+        updateProgressBar(0, totalFrames);
 
         // BGM 미리보기 재생
         startPreviewBGM();
 
-        updateStatus('미리보기 재생 중... (BGM 포함)');
+        updateStatus('미리보기 재생 중... (1회 재생)');
+
+        let processedFrames = 0;
+
+        // 메인 이미지 재생
+        for (let i = 0; i < validImages.length; i++) {
+            currentImageIndex = i;
+            drawCurrentImage();
+            processedFrames++;
+            updateProgressBar(processedFrames, totalFrames);
+
+            await new Promise(resolve => {
+                previewInterval = setTimeout(resolve, duration);
+            });
+        }
+
+        // 엔딩 이미지 재생
+        if (validEndingImages.length > 0) {
+            const validEndingIndices = endingImages
+                .map((img, index) => img !== null ? index : -1)
+                .filter(index => index !== -1);
+
+            for (let i = 0; i < validEndingImages.length; i++) {
+                const actualIndex = validEndingIndices[i];
+                const canvas = document.getElementById('videoCanvas');
+                const ctx = canvas.getContext('2d');
+                const img = endingImages[actualIndex];
+
+                if (img) {
+                    // 엔딩 이미지 렌더링 (메인 이미지 렌더링 로직과 동일)
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.fillStyle = document.getElementById('backgroundColor').value;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    const canvasAspect = canvas.width / canvas.height;
+                    const imgAspect = img.width / img.height;
+                    const imageScaling = document.getElementById('imageScaling').value;
+                    let drawWidth, drawHeight, drawX, drawY;
+
+                    if (imageScaling === 'contain') {
+                        if (imgAspect > canvasAspect) {
+                            drawWidth = canvas.width;
+                            drawHeight = drawWidth / imgAspect;
+                            drawX = 0;
+                            drawY = (canvas.height - drawHeight) / 2;
+                        } else {
+                            drawHeight = canvas.height;
+                            drawWidth = drawHeight * imgAspect;
+                            drawX = (canvas.width - drawWidth) / 2;
+                            drawY = 0;
+                        }
+                    } else { // cover
+                        if (imgAspect > canvasAspect) {
+                            drawHeight = canvas.height;
+                            drawWidth = drawHeight * imgAspect;
+                            drawX = (canvas.width - drawWidth) / 2;
+                            drawY = 0;
+                        } else {
+                            drawWidth = canvas.width;
+                            drawHeight = drawWidth / imgAspect;
+                            drawX = 0;
+                            drawY = (canvas.height - drawHeight) / 2;
+                        }
+                    }
+
+                    ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+
+                    // 엔딩 자막 그리기
+                    const subtitle = endingSubtitles[actualIndex];
+                    if (subtitle && subtitle.trim() !== '') {
+                        const fontSize = parseInt(document.getElementById('subtitleFontSize').value);
+                        const fontColor = document.getElementById('subtitleColor').value;
+                        const position = document.getElementById('subtitlePosition').value;
+                        const useBackground = document.getElementById('subtitleBackground').value === 'true';
+                        const bgColor = document.getElementById('subtitleBgColor').value;
+                        const opacity = parseFloat(document.getElementById('subtitleOpacity').value);
+
+                        ctx.font = 'bold ' + fontSize + 'px "Malgun Gothic", "맑은 고딕", sans-serif';
+                        ctx.textAlign = 'center';
+
+                        const lines = subtitle.split('\n');
+                        const lineHeight = fontSize * 1.3;
+
+                        let baseY;
+                        if (position === 'top') {
+                            baseY = canvas.height * 0.15;
+                        } else if (position === 'center') {
+                            baseY = canvas.height / 2 - ((lines.length - 1) * lineHeight) / 2;
+                        } else if (position === 'custom') {
+                            const customPos = parseFloat(document.getElementById('subtitleVerticalPosition').value) / 100;
+                            baseY = canvas.height * customPos;
+                        } else {
+                            baseY = canvas.height * 0.85 - ((lines.length - 1) * lineHeight);
+                        }
+
+                        lines.forEach((line, index) => {
+                            const y = baseY + (index * lineHeight);
+                            const metrics = ctx.measureText(line);
+                            const textWidth = metrics.width;
+
+                            if (useBackground) {
+                                const padding = 20;
+                                ctx.fillStyle = bgColor;
+                                ctx.globalAlpha = opacity;
+                                ctx.fillRect(
+                                    canvas.width / 2 - textWidth / 2 - padding,
+                                    y - fontSize,
+                                    textWidth + padding * 2,
+                                    fontSize * 1.3
+                                );
+                                ctx.globalAlpha = 1.0;
+                            }
+
+                            ctx.strokeStyle = '#000000';
+                            ctx.lineWidth = fontSize * 0.1;
+                            ctx.strokeText(line, canvas.width / 2, y);
+
+                            ctx.fillStyle = fontColor;
+                            ctx.fillText(line, canvas.width / 2, y);
+                        });
+                    }
+                }
+
+                processedFrames++;
+                updateProgressBar(processedFrames, totalFrames);
+
+                await new Promise(resolve => {
+                    previewInterval = setTimeout(resolve, endingDuration);
+                });
+            }
+        }
+
+        stopBGM();
+        updateStatus('미리보기 완료!');
+        updateProgressBar(0, totalFrames);
     }
 
     function startPreviewBGM() {
@@ -933,10 +1132,269 @@
 
     async function startRecording() {
         const validImages = images.filter(img => img !== null);
-        if (validImages.length === 0) {
+        const validEndingImages = endingImages.filter(img => img !== null);
+
+        if (validImages.length === 0 && validEndingImages.length === 0) {
             updateStatus('먼저 이미지를 업로드해주세요!');
             return;
         }
+
+        // FFmpeg 사용 가능 여부 확인
+        if (ffmpegLoaded && ffmpeg) {
+            await startRecordingWithFFmpeg();
+        } else {
+            await startRecordingWithMediaRecorder();
+        }
+    }
+
+    // FFmpeg.wasm을 사용한 영상 제작
+    async function startRecordingWithFFmpeg() {
+        const validImages = images.filter(img => img !== null);
+        const validEndingImages = endingImages.filter(img => img !== null);
+        const totalFrames = validImages.length + validEndingImages.length;
+
+        try {
+            stopPreview();
+            stopBGM();
+
+            document.getElementById('recordBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            isRecording = true;
+
+            const canvas = document.getElementById('videoCanvas');
+            const duration = parseFloat(document.getElementById('imageDuration').value);
+            const endingDuration = parseFloat(document.getElementById('endingImageDuration')?.value || 3);
+            const fps = 30;
+            const bgmType = document.getElementById('bgmType').value;
+
+            updateStatus('프레임 캡처 시작...');
+
+            // 1단계: 모든 프레임을 이미지로 캡처
+            const fetchFile = window.fetchFile;
+            const validImageIndices = images.map((img, idx) => img !== null ? idx : -1).filter(idx => idx !== -1);
+            const validEndingIndices = endingImages.map((img, idx) => img !== null ? idx : -1).filter(idx => idx !== -1);
+
+            let frameNumber = 0;
+
+            // 메인 이미지 프레임 생성
+            for (let i = 0; i < validImages.length; i++) {
+                currentImageIndex = i;
+                drawCurrentImage();
+
+                const framesForThisImage = Math.round(duration * fps);
+
+                for (let f = 0; f < framesForThisImage; f++) {
+                    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                    const fileName = 'frame' + String(frameNumber).padStart(6, '0') + '.png';
+                    ffmpeg.FS('writeFile', fileName, await fetchFile(blob));
+                    frameNumber++;
+                }
+
+                updateProgressBar(i + 1, totalFrames);
+                updateStatus('메인 프레임 캡처 중... (' + (i + 1) + '/' + validImages.length + ')');
+            }
+
+            // 엔딩 이미지 프레임 생성
+            for (let i = 0; i < validEndingImages.length; i++) {
+                const actualIndex = validEndingIndices[i];
+                const img = endingImages[actualIndex];
+
+                if (img) {
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.fillStyle = document.getElementById('backgroundColor').value;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    const canvasAspect = canvas.width / canvas.height;
+                    const imgAspect = img.width / img.height;
+                    const imageScaling = document.getElementById('imageScaling').value;
+                    let drawWidth, drawHeight, drawX, drawY;
+
+                    if (imageScaling === 'contain') {
+                        if (imgAspect > canvasAspect) {
+                            drawWidth = canvas.width;
+                            drawHeight = drawWidth / imgAspect;
+                            drawX = 0;
+                            drawY = (canvas.height - drawHeight) / 2;
+                        } else {
+                            drawHeight = canvas.height;
+                            drawWidth = drawHeight * imgAspect;
+                            drawX = (canvas.width - drawWidth) / 2;
+                            drawY = 0;
+                        }
+                    } else {
+                        if (imgAspect > canvasAspect) {
+                            drawHeight = canvas.height;
+                            drawWidth = drawHeight * imgAspect;
+                            drawX = (canvas.width - drawWidth) / 2;
+                            drawY = 0;
+                        } else {
+                            drawWidth = canvas.width;
+                            drawHeight = drawWidth / imgAspect;
+                            drawX = 0;
+                            drawY = (canvas.height - drawHeight) / 2;
+                        }
+                    }
+
+                    ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+
+                    // 엔딩 자막
+                    const subtitle = endingSubtitles[actualIndex];
+                    if (subtitle && subtitle.trim() !== '') {
+                        const fontSize = parseInt(document.getElementById('subtitleFontSize').value);
+                        const fontColor = document.getElementById('subtitleColor').value;
+                        const position = document.getElementById('subtitlePosition').value;
+                        const useBackground = document.getElementById('subtitleBackground').value === 'true';
+                        const bgColor = document.getElementById('subtitleBgColor').value;
+                        const opacity = parseFloat(document.getElementById('subtitleOpacity').value);
+
+                        ctx.font = 'bold ' + fontSize + 'px "Malgun Gothic", "맑은 고딕", sans-serif';
+                        ctx.textAlign = 'center';
+
+                        const lines = subtitle.split('\n');
+                        const lineHeight = fontSize * 1.3;
+
+                        let baseY;
+                        if (position === 'top') {
+                            baseY = canvas.height * 0.15;
+                        } else if (position === 'center') {
+                            baseY = canvas.height / 2 - ((lines.length - 1) * lineHeight) / 2;
+                        } else if (position === 'custom') {
+                            const customPos = parseFloat(document.getElementById('subtitleVerticalPosition').value) / 100;
+                            baseY = canvas.height * customPos;
+                        } else {
+                            baseY = canvas.height * 0.85 - ((lines.length - 1) * lineHeight);
+                        }
+
+                        lines.forEach((line, index) => {
+                            const y = baseY + (index * lineHeight);
+                            const metrics = ctx.measureText(line);
+                            const textWidth = metrics.width;
+
+                            if (useBackground) {
+                                const padding = 20;
+                                ctx.fillStyle = bgColor;
+                                ctx.globalAlpha = opacity;
+                                ctx.fillRect(
+                                    canvas.width / 2 - textWidth / 2 - padding,
+                                    y - fontSize,
+                                    textWidth + padding * 2,
+                                    fontSize * 1.3
+                                );
+                                ctx.globalAlpha = 1.0;
+                            }
+
+                            ctx.strokeStyle = '#000000';
+                            ctx.lineWidth = fontSize * 0.1;
+                            ctx.strokeText(line, canvas.width / 2, y);
+
+                            ctx.fillStyle = fontColor;
+                            ctx.fillText(line, canvas.width / 2, y);
+                        });
+                    }
+
+                    const framesForThisImage = Math.round(endingDuration * fps);
+
+                    for (let f = 0; f < framesForThisImage; f++) {
+                        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                        const fileName = 'frame' + String(frameNumber).padStart(6, '0') + '.png';
+                        ffmpeg.FS('writeFile', fileName, await fetchFile(blob));
+                        frameNumber++;
+                    }
+
+                    updateProgressBar(validImages.length + i + 1, totalFrames);
+                    updateStatus('엔딩 프레임 캡처 중... (' + (i + 1) + '/' + validEndingImages.length + ')');
+                }
+            }
+
+            updateStatus('FFmpeg으로 영상 인코딩 중...');
+
+            // 2단계: FFmpeg으로 영상 생성
+            const videoBitrate = document.getElementById('videoQuality').value;
+            const bitrateK = Math.round(parseInt(videoBitrate) / 1000) + 'k';
+
+            // BGM 추가 (FFmpeg 실행 전에 파일 준비)
+            if (bgmType === 'custom' && customMusicFile) {
+                ffmpeg.FS('writeFile', 'bgm.mp3', await fetchFile(customMusicFile));
+            }
+
+            // FFmpeg 명령어 구성
+            const ffmpegArgs = [
+                '-framerate', String(fps),
+                '-start_number', '0',
+                '-i', 'frame%06d.png',
+                '-frames:v', String(frameNumber),
+                '-c:v', 'libx264',
+                '-b:v', bitrateK,
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart'
+            ];
+
+            // BGM 옵션 추가
+            if (bgmType === 'custom' && customMusicFile) {
+                const volume = parseFloat(document.getElementById('bgmVolume').value);
+                const startTime = parseFloat(document.getElementById('bgmStartTime').value) || 0;
+                const endTime = parseFloat(document.getElementById('bgmEndTime').value) || 0;
+
+                if (endTime > startTime) {
+                    ffmpegArgs.splice(0, 0, '-ss', String(startTime), '-to', String(endTime));
+                }
+
+                ffmpegArgs.push(
+                    '-i', 'bgm.mp3',
+                    '-filter_complex', '[1:a]volume=' + volume + '[a]',
+                    '-map', '0:v',
+                    '-map', '[a]',
+                    '-shortest'
+                );
+            }
+
+            ffmpegArgs.push('output.mp4');
+
+            await ffmpeg.run(...ffmpegArgs);
+
+            // 3단계: 결과 다운로드
+            const data = ffmpeg.FS('readFile', 'output.mp4');
+            const blob = new Blob([data.buffer], { type: 'video/mp4' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            const quality = getQualityText();
+            const totalDuration = (duration * validImages.length + endingDuration * validEndingImages.length).toFixed(1);
+            a.download = 'my-video-ffmpeg-' + quality + '-' + totalDuration + 's-' + Date.now() + '.mp4';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            // 임시 파일 정리
+            for (let i = 0; i < frameNumber; i++) {
+                const fileName = 'frame' + String(i).padStart(6, '0') + '.png';
+                try { ffmpeg.FS('unlink', fileName); } catch (e) {}
+            }
+            try { ffmpeg.FS('unlink', 'output.mp4'); } catch (e) {}
+            try { ffmpeg.FS('unlink', 'bgm.mp3'); } catch (e) {}
+
+            updateStatus('✅ FFmpeg 영상 제작 완료! (총 ' + totalDuration + '초, ' + frameNumber + ' 프레임)');
+            updateProgressBar(0, 1);
+            document.getElementById('recordBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            isRecording = false;
+
+        } catch (error) {
+            console.error('FFmpeg 녹화 오류:', error);
+            updateStatus('❌ FFmpeg 오류: ' + error.message);
+            document.getElementById('recordBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            isRecording = false;
+        }
+    }
+
+    // 기존 MediaRecorder 방식 (폴백용)
+    async function startRecordingWithMediaRecorder() {
+        const validImages = images.filter(img => img !== null);
+        const validEndingImages = endingImages.filter(img => img !== null);
 
         try {
             stopPreview();
@@ -1057,27 +1515,53 @@
             }
             
             mediaRecorder = new MediaRecorder(combinedStream, options);
-            
+
+            let lastDataTimestamp = Date.now();
+            let isWaitingForData = false;
+
             mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0) recordedChunks.push(event.data);
+                if (event.data.size > 0) {
+                    recordedChunks.push(event.data);
+                    lastDataTimestamp = Date.now();
+                }
             };
-            
+
+            // 데이터 생성 확인 후 중지하는 함수 (매개변수로 대기 시간 받음)
+            function stopWhenReady(waitTime) {
+                if (isWaitingForData) return; // 이미 대기 중이면 중복 호출 방지
+                isWaitingForData = true;
+
+                // waitTime이 제공되지 않으면 기본값 500ms 사용
+                const actualWaitTime = waitTime !== undefined ? waitTime : 500;
+
+                console.log('stopWhenReady 호출됨, ' + actualWaitTime + 'ms 후 녹화 중지 예정');
+                // 지정된 시간 대기 후 중지
+                // 이유: 마지막 프레임의 인코딩을 완전히 보장하기 위해 충분한 시간 제공
+                setTimeout(() => {
+                    console.log('MediaRecorder 중지 실행');
+                    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                        mediaRecorder.stop();
+                    }
+                }, actualWaitTime);
+            }
+
             mediaRecorder.onstop = () => {
                 const blob = new Blob(recordedChunks, { type: options.mimeType });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                
+
                 const quality = getQualityText();
                 const imageDuration = parseFloat(document.getElementById('imageDuration').value);
-                const totalDuration = (imageDuration * validImages.length).toFixed(1);
-                
+                const endingDuration = parseFloat(document.getElementById('endingImageDuration')?.value || 1);
+                const totalDuration = (imageDuration * validImages.length + endingDuration * validEndingImages.length).toFixed(1);
+
                 a.download = 'my-video-' + quality + '-' + totalDuration + 's-' + Date.now() + '.mp4';
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
-                
+
                 updateStatus(quality + ' MP4 영상 제작 완료! (총 ' + totalDuration + '초)');
                 updateProgressBar(0, 1);
                 document.getElementById('recordBtn').disabled = false;
@@ -1085,43 +1569,207 @@
                 stopBGM();
             };
             
-            mediaRecorder.start();
+            // MediaRecorder 시작: 100ms 타임슬라이스로 정확한 데이터 생성 추적
+            // 타임슬라이스를 100ms로 설정하면 ondataavailable이 최소 100ms마다 호출되어
+            // lastDataTimestamp 업데이트를 통해 실시간으로 녹화 상태를 모니터링 가능
+            mediaRecorder.start(100);
             isRecording = true;
             document.getElementById('recordBtn').disabled = true;
             document.getElementById('stopBtn').disabled = false;
-            
+
             const duration = parseFloat(document.getElementById('imageDuration').value) * 1000;
-            const totalFrames = validImages.length;
-            const totalDuration = (duration * totalFrames / 1000).toFixed(1);
+            const endingDuration = parseFloat(document.getElementById('endingImageDuration')?.value || 1) * 1000;
+            const totalFrames = validImages.length + validEndingImages.length;
+            const totalDuration = ((duration * validImages.length + endingDuration * validEndingImages.length) / 1000).toFixed(1);
             updateStatus('영상 제작 시작... (총 ' + totalDuration + '초 예상)');
-            
-            currentImageIndex = 0;
-            drawCurrentImage();
-            await new Promise(resolve => requestAnimationFrame(resolve));
-            await new Promise(resolve => requestAnimationFrame(resolve));
-            
-            for (let frameIndex = 0; frameIndex < totalFrames && isRecording; frameIndex++) {
-                currentImageIndex = frameIndex;
-                drawCurrentImage();
-                await new Promise(resolve => requestAnimationFrame(resolve));
 
-                updateProgressBar(frameIndex + 1, totalFrames);
-                updateStatus('영상 제작 중... (' + (frameIndex + 1) + '/' + totalFrames + ') - 총 ' + totalDuration + '초');
+            // 유효한 엔딩 이미지의 실제 인덱스 배열 미리 생성
+            const validEndingIndices = endingImages
+                .map((img, index) => img !== null ? index : -1)
+                .filter(index => index !== -1);
 
-                const frameStartTime = performance.now();
-                while (isRecording && (performance.now() - frameStartTime) < duration) {
-                    await new Promise(resolve => setTimeout(resolve, 16));
+            let frameIndex = 0;
+            let processedFrames = 0;
+
+            // 재귀 루프 함수로 각 프레임 처리
+            const recordingLoop = () => {
+                if (!isRecording) return;
+
+                // 메인 이미지 처리
+                if (frameIndex < validImages.length) {
+                    currentImageIndex = frameIndex;
+                    drawCurrentImage();
+                    processedFrames++;
+                    updateProgressBar(processedFrames, totalFrames);
+                    updateStatus('메인 이미지 제작 중... (' + (frameIndex + 1) + '/' + validImages.length + ') - 총 ' + totalDuration + '초');
+
+                    // 마지막 메인 이미지인지 확인
+                    const isLastMainImage = (frameIndex === validImages.length - 1);
+                    const hasEndingImages = validEndingImages.length > 0;
+
+                    frameIndex++;
+
+                    // RAF로 렌더링 완료 보장 후 타이밍 시작
+                    requestAnimationFrame(() => {
+                        requestAnimationFrame(() => {
+                            if (!isRecording) return;
+
+                            // 마지막 프레임 처리
+                            if (isLastMainImage && !hasEndingImages) {
+                                console.log('마지막 메인 프레임 ' + (frameIndex - 1) + ', ' + duration + 'ms 녹화 후 중지');
+                                stopWhenReady(duration);
+                            } else {
+                                // 중간 프레임: duration 대기 후 다음 프레임
+                                console.log('메인 프레임 ' + (frameIndex - 1) + ', ' + duration + 'ms 대기 후 다음 프레임');
+                                setTimeout(() => {
+                                    if (!isRecording) return;
+                                    recordingLoop();
+                                }, duration);
+                            }
+                        });
+                    });
                 }
-            }
+                // 엔딩 이미지 처리
+                else {
+                    const endingIndex = frameIndex - validImages.length;
 
-            // 마지막 프레임의 완전한 duration 보장 (100ms 버퍼 추가)
-            if (isRecording) {
-                await new Promise(resolve => setTimeout(resolve, duration + 100));
-            }
+                    if (endingIndex < validEndingImages.length) {
+                        const actualIndex = validEndingIndices[endingIndex];
 
-            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-                mediaRecorder.stop();
-            }
+                        // 엔딩 이미지 렌더링
+                        const canvas = document.getElementById('videoCanvas');
+                        const ctx = canvas.getContext('2d');
+                        const img = endingImages[actualIndex];
+
+                        if (img) {
+                            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                            // 배경색
+                            const bgColor = document.getElementById('backgroundColor').value;
+                            ctx.fillStyle = bgColor;
+                            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                            // 이미지 그리기
+                            const scaling = document.getElementById('imageScaling').value;
+                            const imgAspect = img.width / img.height;
+                            const canvasAspect = canvas.width / canvas.height;
+
+                            let drawWidth, drawHeight, drawX, drawY;
+
+                            if (scaling === 'cover') {
+                                if (imgAspect > canvasAspect) {
+                                    drawHeight = canvas.height;
+                                    drawWidth = drawHeight * imgAspect;
+                                } else {
+                                    drawWidth = canvas.width;
+                                    drawHeight = drawWidth / imgAspect;
+                                }
+                                drawX = (canvas.width - drawWidth) / 2;
+                                drawY = (canvas.height - drawHeight) / 2;
+                            } else {
+                                if (imgAspect > canvasAspect) {
+                                    drawWidth = canvas.width;
+                                    drawHeight = drawWidth / imgAspect;
+                                } else {
+                                    drawHeight = canvas.height;
+                                    drawWidth = drawHeight * imgAspect;
+                                }
+                                drawX = (canvas.width - drawWidth) / 2;
+                                drawY = (canvas.height - drawHeight) / 2;
+                            }
+
+                            ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
+
+                            // 엔딩 자막 그리기
+                            const subtitle = endingSubtitles[actualIndex];
+                            if (subtitle && subtitle.trim() !== '') {
+                                const fontSize = parseInt(document.getElementById('subtitleFontSize').value);
+                                const fontColor = document.getElementById('subtitleColor').value;
+                                const position = document.getElementById('subtitlePosition').value;
+                                const useBackground = document.getElementById('subtitleBackground').value === 'true';
+                                const bgColor = document.getElementById('subtitleBgColor').value;
+                                const opacity = parseFloat(document.getElementById('subtitleOpacity').value);
+
+                                ctx.font = 'bold ' + fontSize + 'px "Malgun Gothic", "맑은 고딕", sans-serif';
+                                ctx.textAlign = 'center';
+
+                                const lines = subtitle.split('\n');
+                                const lineHeight = fontSize * 1.3;
+
+                                let baseY;
+                                if (position === 'top') {
+                                    baseY = canvas.height * 0.15;
+                                } else if (position === 'center') {
+                                    baseY = canvas.height / 2 - ((lines.length - 1) * lineHeight) / 2;
+                                } else if (position === 'custom') {
+                                    const customPos = parseFloat(document.getElementById('subtitleVerticalPosition').value) / 100;
+                                    baseY = canvas.height * customPos;
+                                } else {
+                                    baseY = canvas.height * 0.85 - ((lines.length - 1) * lineHeight);
+                                }
+
+                                lines.forEach((line, index) => {
+                                    const y = baseY + (index * lineHeight);
+                                    const metrics = ctx.measureText(line);
+                                    const textWidth = metrics.width;
+
+                                    if (useBackground) {
+                                        const padding = 20;
+                                        ctx.fillStyle = bgColor;
+                                        ctx.globalAlpha = opacity;
+                                        ctx.fillRect(
+                                            canvas.width / 2 - textWidth / 2 - padding,
+                                            y - fontSize,
+                                            textWidth + padding * 2,
+                                            fontSize * 1.3
+                                        );
+                                        ctx.globalAlpha = 1.0;
+                                    }
+
+                                    ctx.strokeStyle = '#000000';
+                                    ctx.lineWidth = fontSize * 0.1;
+                                    ctx.strokeText(line, canvas.width / 2, y);
+
+                                    ctx.fillStyle = fontColor;
+                                    ctx.fillText(line, canvas.width / 2, y);
+                                });
+                            }
+                        }
+
+                        processedFrames++;
+                        updateProgressBar(processedFrames, totalFrames);
+                        updateStatus('엔딩 이미지 제작 중... (' + (endingIndex + 1) + '/' + validEndingImages.length + ') - 총 ' + totalDuration + '초');
+
+                        // 마지막 엔딩 이미지인지 확인
+                        const isLastEndingImage = (endingIndex === validEndingImages.length - 1);
+
+                        frameIndex++;
+
+                        // RAF로 렌더링 완료 보장 후 타이밍 시작
+                        requestAnimationFrame(() => {
+                            requestAnimationFrame(() => {
+                                if (!isRecording) return;
+
+                                // 마지막 엔딩 프레임 처리
+                                if (isLastEndingImage) {
+                                    console.log('마지막 엔딩 프레임 ' + (endingIndex + 1) + ', ' + endingDuration + 'ms 녹화 후 중지');
+                                    stopWhenReady(endingDuration);
+                                } else {
+                                    // 중간 엔딩 프레임: endingDuration 대기 후 다음 프레임
+                                    console.log('엔딩 프레임 ' + (endingIndex + 1) + ', ' + endingDuration + 'ms 대기 후 다음 프레임');
+                                    setTimeout(() => {
+                                        if (!isRecording) return;
+                                        recordingLoop();
+                                    }, endingDuration);
+                                }
+                            });
+                        });
+                    }
+                }
+            };
+
+            // 녹화 루프 시작
+            recordingLoop();
             
         } catch (error) {
             console.error('녹화 오류:', error);
@@ -1154,9 +1802,139 @@
 
     function updateStatus(message) {
         const validImages = images.filter(img => img !== null);
-        const defaultMessage = validImages.length > 0 
-            ? validImages.length + '개 이미지 업로드됨. 영상을 제작해보세요!'
-            : '이미지를 업로드하고 영상을 제작해보세요!';
+        const validEndingImages = endingImages.filter(img => img !== null);
+        const totalImages = validImages.length + validEndingImages.length;
+
+        let defaultMessage = '이미지를 업로드하고 영상을 제작해보세요!';
+        if (totalImages > 0) {
+            defaultMessage = validImages.length + '개 메인 이미지';
+            if (validEndingImages.length > 0) {
+                defaultMessage += ' + ' + validEndingImages.length + '개 엔딩 이미지';
+            }
+            defaultMessage += ' 업로드됨. 영상을 제작해보세요!';
+        }
+
         document.getElementById('status').textContent = message || defaultMessage;
+    }
+
+    // ============ 엔딩 이미지 관련 함수 ============
+
+    function initializeEndingUploadSlots() {
+        const endingUploadGrid = document.getElementById('endingUploadGrid');
+        endingUploadGrid.innerHTML = '';
+        for (let i = 0; i < MAX_ENDING_IMAGES; i++) {
+            const slot = document.createElement('div');
+            slot.className = 'upload-slot';
+            slot.dataset.index = i;
+            slot.innerHTML = `
+                <input type="file" accept="image/*" onchange="handleEndingImageUpload(${i}, this)">
+                <div class="slot-number">E${i + 1}</div>
+                <div style="font-size: 24px; color: #ff9800;">+</div>
+            `;
+            endingUploadGrid.appendChild(slot);
+        }
+    }
+
+    function handleEndingImageUpload(index, input) {
+        const file = input.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                endingImages[index] = img;
+                updateEndingSlot(index);
+                generateEndingSubtitleInputs();
+                updateStatus();
+                drawCurrentImage();
+            };
+            img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function updateEndingSlot(index) {
+        const slot = document.querySelector(`#endingUploadGrid .upload-slot[data-index="${index}"]`);
+        if (!slot) return;
+
+        if (endingImages[index]) {
+            slot.classList.add('has-image');
+            slot.innerHTML = `
+                <img src="${endingImages[index].src}" alt="Ending ${index + 1}">
+                <div class="slot-number">E${index + 1}</div>
+                <button class="remove-btn" onclick="removeEndingImage(${index})">×</button>
+            `;
+        } else {
+            slot.classList.remove('has-image');
+            slot.innerHTML = `
+                <input type="file" accept="image/*" onchange="handleEndingImageUpload(${index}, this)">
+                <div class="slot-number">E${index + 1}</div>
+                <div style="font-size: 24px; color: #ff9800;">+</div>
+            `;
+        }
+    }
+
+    function removeEndingImage(index) {
+        endingImages[index] = null;
+        endingSubtitles[index] = '';
+        updateEndingSlot(index);
+        generateEndingSubtitleInputs();
+        updateStatus();
+        drawCurrentImage();
+    }
+
+    function processEndingBulkUpload() {
+        const input = document.getElementById('endingBulkUpload');
+        const files = Array.from(input.files);
+
+        if (files.length === 0) return;
+
+        let uploadedCount = 0;
+        let emptySlotIndex = 0;
+
+        for (let i = 0; i < files.length && emptySlotIndex < MAX_ENDING_IMAGES; i++) {
+            while (emptySlotIndex < MAX_ENDING_IMAGES && endingImages[emptySlotIndex] !== null) {
+                emptySlotIndex++;
+            }
+
+            if (emptySlotIndex >= MAX_ENDING_IMAGES) break;
+
+            const file = files[i];
+            const currentIndex = emptySlotIndex;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    endingImages[currentIndex] = img;
+                    updateEndingSlot(currentIndex);
+                    uploadedCount++;
+
+                    if (uploadedCount === Math.min(files.length, MAX_ENDING_IMAGES)) {
+                        generateEndingSubtitleInputs();
+                        updateStatus(uploadedCount + '개의 엔딩 이미지가 업로드되었습니다!');
+                        drawCurrentImage();
+                    }
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+
+            emptySlotIndex++;
+        }
+
+        input.value = '';
+    }
+
+    function clearAllEndingImages() {
+        if (!confirm('모든 엔딩 이미지를 삭제하시겠습니까?')) return;
+
+        endingImages.fill(null);
+        endingSubtitles.fill('');
+        initializeEndingUploadSlots();
+        generateEndingSubtitleInputs();
+        updateStatus();
+        drawCurrentImage();
     }
 </script>
